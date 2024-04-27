@@ -29,7 +29,7 @@ namespace Orleans.Runtime
             }
 
             var fullStateName = GetFullStateName(context, cfg);
-            return new PersistentState<TState>(fullStateName, context, storageProvider);
+            return new PersistentState<TState>(fullStateName, cfg.LoadStateAutomatically, context, storageProvider);
         }
 
         protected virtual string GetFullStateName(IGrainContext context, IPersistentStateConfiguration cfg)
@@ -56,11 +56,14 @@ namespace Orleans.Runtime
 
     internal sealed class PersistentState<TState> : StateStorageBridge<TState>, IPersistentState<TState>, ILifecycleObserver
     {
-        public PersistentState(string stateName, IGrainContext context, IGrainStorage storageProvider) : base(stateName, context, storageProvider, context.ActivationServices.GetRequiredService<ILoggerFactory>(), context.ActivationServices.GetRequiredService<IActivatorProvider>())
+        private readonly bool _loadStateAutomatically;
+
+        public PersistentState(string stateName, bool loadStateAutomatically, IGrainContext context, IGrainStorage storageProvider) : base(stateName, context, storageProvider, context.ActivationServices.GetRequiredService<ILoggerFactory>(), context.ActivationServices.GetRequiredService<IActivatorProvider>())
         {
             var lifecycle = context.ObservableLifecycle;
             lifecycle.Subscribe(RuntimeTypeNameFormatter.Format(GetType()), GrainLifecycleStage.SetupState, this);
             lifecycle.AddMigrationParticipant(this);
+            _loadStateAutomatically = loadStateAutomatically;
         }
 
         public Task OnStart(CancellationToken cancellationToken = default) 
@@ -76,7 +79,7 @@ namespace Orleans.Runtime
                 return Task.CompletedTask;
             }
 
-            return ReadStateAsync();
+            return _loadStateAutomatically ? ReadStateAsync(ReadStateBehaviour.Always) : Task.CompletedTask;
         }
 
         public Task OnStop(CancellationToken cancellationToken = default) => Task.CompletedTask;

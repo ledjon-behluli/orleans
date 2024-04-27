@@ -1,38 +1,37 @@
 using System;
 
-namespace Orleans.Runtime
+namespace Orleans.Runtime;
+
+/// <summary>
+/// Specifies options for the <see cref="IPersistentState{TState}"/> constructor argument which it is applied to.
+/// </summary>
+/// <seealso cref="Attribute" />
+/// <seealso cref="IFacetMetadata" />
+/// <seealso cref="IPersistentStateConfiguration" />
+[AttributeUsage(AttributeTargets.Parameter)]
+public class PersistentStateAttribute : Attribute, IFacetMetadata, IPersistentStateConfiguration
 {
     /// <summary>
-    /// Specifies options for the <see cref="IPersistentState{TState}"/> constructor argument which it is applied to.
+    /// Initializes a new instance of the <see cref="PersistentStateAttribute"/> class.
     /// </summary>
-    /// <seealso cref="System.Attribute" />
-    /// <seealso cref="Orleans.IFacetMetadata" />
-    /// <seealso cref="Orleans.Runtime.IPersistentStateConfiguration" />
-    [AttributeUsage(AttributeTargets.Parameter)]
-    public class PersistentStateAttribute : Attribute, IFacetMetadata, IPersistentStateConfiguration
+    /// <param name="stateName">Name of the state.</param>
+    /// <param name="storageName">Name of the storage provider.</param>
+    /// <param name="loadStateAutomatically">Wether to load the state automatically or not.</param>
+    public PersistentStateAttribute(string stateName, string storageName = null, bool loadStateAutomatically = true)
     {
-        /// <summary>
-        /// Initializes a new instance of the <see cref="PersistentStateAttribute"/> class.
-        /// </summary>
-        /// <param name="stateName">Name of the state.</param>
-        /// <param name="storageName">Name of the storage provider.</param>
-        public PersistentStateAttribute(string stateName, string storageName = null)
-        {
-            ArgumentNullException.ThrowIfNull(stateName);
-            this.StateName = stateName;
-            this.StorageName = storageName;
-        }
+        ArgumentNullException.ThrowIfNull(stateName);
 
-        /// <summary>
-        /// Gets the name of the state.
-        /// </summary>
-        /// <value>The name of the state.</value>
-        public string StateName { get; }
-
-        /// <summary>
-        /// Gets the name of the storage provider.
-        /// </summary>
-        /// <value>The name of the storage provider.</value>
-        public string StorageName { get; }
+        StateName = stateName;
+        StorageName = storageName;
+        LoadStateAutomatically = loadStateAutomatically;
     }
+
+    /// <inheritdoc/>
+    public string StateName { get; }
+
+    /// <inheritdoc/>
+    public string StorageName { get; }
+
+    /// <inheritdoc/>
+    public bool LoadStateAutomatically { get; }
 }

@@ -18,5 +18,11 @@ namespace Orleans.Runtime
         /// </summary>
         /// <value>The name of the storage provider.</value>
         string StorageName { get; }
+
+        /// <summary>
+        /// Wether to load the state automatically or not.
+        /// </summary>
+        /// <value>Defaults to <see langword="true"/></value>
+        bool LoadStateAutomatically { get; }
     }
 }

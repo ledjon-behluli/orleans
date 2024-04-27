@@ -18,7 +18,12 @@ namespace Orleans
             // set state name to parameter name, if not already specified
             if (string.IsNullOrEmpty(config.StateName))
             {
-                config = new PersistentStateConfiguration() { StateName = parameter.Name, StorageName = attribute.StorageName };
+                config = new PersistentStateConfiguration()
+                {
+                    StateName = parameter.Name,
+                    StorageName = attribute.StorageName,
+                    LoadStateAutomatically = attribute.LoadStateAutomatically
+                };
             }
             // use generic type args to define collection type.
             MethodInfo genericCreate = create.MakeGenericMethod(parameter.ParameterType.GetGenericArguments());
@@ -35,8 +40,8 @@ namespace Orleans
         private class PersistentStateConfiguration : IPersistentStateConfiguration
         {
             public string StateName { get; set; }
-
             public string StorageName { get; set; }
+            public bool LoadStateAutomatically { get; set; }
         }
     }
 }
