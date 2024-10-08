@@ -67,6 +67,16 @@ namespace Orleans
         TGrainObserverInterface CreateObjectReference<TGrainObserverInterface>(IGrainObserver obj) where TGrainObserverInterface : IGrainObserver;
 
         /// <summary>
+        /// Creates a reference to the provided <paramref name="obj"/> and assigns a non-random <paramref name="observerId"/>.
+        /// </summary>
+        /// <typeparam name="TGrainObserverInterface">
+        /// The specific <see cref="IGrainObserver"/> type of <paramref name="obj"/>.
+        /// </typeparam>
+        /// <param name="obj">The object to create a reference to.</param>
+        /// <returns>The reference to <paramref name="obj"/>.</returns>
+        TGrainObserverInterface CreateObjectReference<TGrainObserverInterface>(IGrainObserver obj, Guid observerId) where TGrainObserverInterface : IGrainObserver;
+
+        /// <summary>
         /// Deletes the provided object reference.
         /// </summary>
         /// <typeparam name="TGrainObserverInterface">

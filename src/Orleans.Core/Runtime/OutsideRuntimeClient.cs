@@ -13,7 +13,6 @@ using Orleans.Messaging;
 using Orleans.Runtime;
 using Orleans.Serialization;
 using Orleans.Serialization.Invocation;
-using Orleans.Serialization.Serializers;
 using static Orleans.Internal.StandardExtensions;
 
 namespace Orleans
@@ -112,6 +111,7 @@ namespace Orleans
                 this.localObjects = new InvokableObjectManager(
                     ServiceProvider.GetRequiredService<ClientGrainContext>(),
                     this,
+                    ServiceProvider.GetRequiredService<IGrainObserverFactory>(),
                     ServiceProvider.GetRequiredService<DeepCopier>(),
                     messagingTrace,
                     ServiceProvider.GetRequiredService<DeepCopier<Response>>(),
@@ -353,7 +353,13 @@ namespace Orleans
         /// <inheritdoc />
         public void SetResponseTimeout(TimeSpan timeout) => this.sharedCallbackData.ResponseTimeout = timeout;
 
-        public IAddressable CreateObjectReference(IAddressable obj)
+        /// <inheritdoc />
+        public IAddressable CreateObjectReference(IAddressable obj) => CreateObjectReferenceCore(obj);
+
+        /// <inheritdoc />
+        public IAddressable CreateObjectReference(IAddressable obj, Guid observerId) => CreateObjectReferenceCore(obj, observerId);
+
+        private IAddressable CreateObjectReferenceCore(IAddressable obj, Guid? observerId = null)
         {
             if (obj is GrainReference)
                 throw new ArgumentException("Argument obj is already a grain reference.", nameof(obj));
@@ -361,12 +367,14 @@ namespace Orleans
             if (obj is IGrainBase)
                 throw new ArgumentException("Argument must not be a grain class.", nameof(obj));
 
-            var observerId = obj is ClientObserver clientObserver
+            var observerGrainId = obj is ClientObserver clientObserver
                 ? clientObserver.GetObserverGrainId(_localClientDetails.ClientId)
+                : observerId.HasValue ? ObserverGrainId.Create(_localClientDetails.ClientId, observerId.Value) 
                 : ObserverGrainId.Create(_localClientDetails.ClientId);
-            var reference = this.InternalGrainFactory.GetGrain(observerId.GrainId);
 
-            if (!localObjects.TryRegister(obj, observerId))
+            var reference = this.InternalGrainFactory.GetGrain(observerGrainId.GrainId);
+
+            if (!localObjects.TryRegister(obj, observerGrainId))
             {
                 throw new ArgumentException($"Failed to add new observer {reference} to localObjects collection.", "reference");
             }

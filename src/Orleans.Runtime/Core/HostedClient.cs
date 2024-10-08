@@ -42,6 +42,7 @@ namespace Orleans.Runtime
             ILogger<HostedClient> logger,
             IGrainReferenceRuntime grainReferenceRuntime,
             IInternalGrainFactory grainFactory,
+            IGrainObserverFactory observerFactory,
             MessageCenter messageCenter,
             MessagingTrace messagingTrace,
             DeepCopier deepCopier,
@@ -61,6 +62,7 @@ namespace Orleans.Runtime
             this.invokableObjects = new InvokableObjectManager(
                 this,
                 runtimeClient,
+                observerFactory,
                 deepCopier,
                 messagingTrace,
                 runtimeClient.ServiceProvider.GetRequiredService<DeepCopier<Response>>(),
@@ -103,13 +105,20 @@ namespace Orleans.Runtime
         public override string ToString() => $"{nameof(HostedClient)}_{this.Address}";
 
         /// <inheritdoc />
-        public IAddressable CreateObjectReference(IAddressable obj)
+        public IAddressable CreateObjectReference(IAddressable obj) =>
+            CreateObjectReferenceCore(obj, null);
+
+        /// <inheritdoc />
+        public IAddressable CreateObjectReference(IAddressable obj, Guid observerId) =>
+            CreateObjectReferenceCore(obj, observerId);
+
+        private IAddressable CreateObjectReferenceCore(IAddressable obj, Guid? observerId)
         {
             if (obj is GrainReference) throw new ArgumentException("Argument obj is already a grain reference.");
 
-            var observerId = ObserverGrainId.Create(this.ClientId);
-            var grainReference = this.grainFactory.GetGrain(observerId.GrainId);
-            if (!this.invokableObjects.TryRegister(obj, observerId))
+            var grainObserverId = observerId.HasValue ? ObserverGrainId.Create(ClientId, observerId.Value) : ObserverGrainId.Create(ClientId);
+            var grainReference = this.grainFactory.GetGrain(grainObserverId.GrainId);
+            if (!this.invokableObjects.TryRegister(obj, grainObserverId))
             {
                 throw new ArgumentException(
                     string.Format("Failed to add new observer {0} to localObjects collection.", grainReference),

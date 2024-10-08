@@ -38,6 +38,17 @@ namespace Orleans.Runtime
         public static ObserverGrainId Create(ClientGrainId clientId) => Create(clientId, GrainIdKeyExtensions.CreateGuidKey(Guid.NewGuid()));
 
         /// <summary>
+        /// Returns a new, non-random <see cref="ObserverGrainId"/> instance for the provided <paramref name="clientId"/> and <paramref name="observerId"/>.
+        /// </summary>
+        /// <param name="clientId">
+        /// The client id.
+        /// </param>
+        /// <returns>
+        /// A new, random <see cref="ObserverGrainId"/> instance for the provided client id.
+        /// </returns>
+        public static ObserverGrainId Create(ClientGrainId clientId, Guid observerId) => Create(clientId, GrainIdKeyExtensions.CreateGuidKey(observerId));
+
+        /// <summary>
         /// Returns a new <see cref="ObserverGrainId"/> instance for the provided client id.
         /// </summary>
         /// <param name="clientId">

@@ -26,6 +26,7 @@ using Orleans.Hosting;
 using System.Reflection;
 using Microsoft.Extensions.Configuration;
 using Orleans.Placement.Repartitioning;
+using Orleans.ClientObservers;
 
 namespace Orleans
 {
@@ -72,6 +73,7 @@ namespace Orleans
 
             services.TryAddSingleton<GrainBindingsResolver>();
             services.TryAddSingleton<LocalClientDetails>();
+            services.TryAddSingleton<IGrainObserverFactory, GrainObserverFactory>();
             services.TryAddSingleton<OutsideRuntimeClient>();
             services.TryAddSingleton<InterfaceToImplementationMappingCache>();
             services.TryAddSingleton<ClientGrainContext>();

@@ -1,4 +1,5 @@
 using System;
+using System.Buffers.Text;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Threading;
@@ -19,6 +20,7 @@ namespace Orleans
         private readonly InterfaceToImplementationMappingCache _interfaceToImplementationMapping;
         private readonly IGrainContext rootGrainContext;
         private readonly IRuntimeClient runtimeClient;
+        private readonly IGrainObserverFactory _observerFactory;
         private readonly ILogger logger;
         private readonly DeepCopier deepCopier;
         private readonly DeepCopier<Response> _responseCopier;
@@ -31,6 +33,7 @@ namespace Orleans
         public InvokableObjectManager(
             IGrainContext rootGrainContext,
             IRuntimeClient runtimeClient,
+            IGrainObserverFactory observerFactory,
             DeepCopier deepCopier,
             MessagingTrace messagingTrace,
             DeepCopier<Response> responseCopier,
@@ -39,6 +42,7 @@ namespace Orleans
         {
             this.rootGrainContext = rootGrainContext;
             this.runtimeClient = runtimeClient;
+            _observerFactory = observerFactory;
             this.deepCopier = deepCopier;
             this.messagingTrace = messagingTrace;
             _responseCopier = responseCopier;
@@ -58,7 +62,7 @@ namespace Orleans
 
         public void Dispatch(Message message)
         {
-            if (!ObserverGrainId.TryParse(message.TargetGrain, out var observerId))
+            if (!ObserverGrainId.TryParse(message.TargetGrain, out var objectId))
             {
                 this.logger.LogError(
                     (int)ErrorCode.ProxyClient_OGC_TargetNotFound_2,
@@ -67,17 +71,49 @@ namespace Orleans
                 return;
             }
 
-            if (this.localObjects.TryGetValue(observerId, out var objectData))
+            if (this.localObjects.TryGetValue(objectId, out var objectData))
             {
                 objectData.ReceiveMessage(message);
             }
             else
             {
+                if (TryGetGuidObserverId(objectId.GrainId, out var observerId))
+                {
+                    if (_observerFactory.TryCreateObserver(observerId, out var observer))
+                    {
+                        // We dont need to explicitly add it to the localObjects, because 'CreateObjectReference' will do so
+                        // when it calls back into this to register the observer reference.
+
+                        _ = runtimeClient.CreateObjectReference(observer, observerId);
+                        if (localObjects.TryGetValue(objectId, out objectData))
+                        {
+                            objectData.ReceiveMessage(message);
+                        }
+
+                        return;
+                    }
+                }
+
                 this.logger.LogError(
-                    (int)ErrorCode.ProxyClient_OGC_TargetNotFound,
-                    "Unexpected target grain in request: {TargetGrain}. Message: {Message}",
-                    message.TargetGrain,
-                    message);
+                   (int)ErrorCode.ProxyClient_OGC_TargetNotFound,
+                   "Unexpected target grain in request: {TargetGrain}. Message: {Message}",
+                   message.TargetGrain,
+                   message);
+            }
+
+            static bool TryGetGuidObserverId(GrainId grainId, out Guid observerId)
+            {
+                var keyString = grainId.Key.AsSpan();
+                var plusIndex = keyString.IndexOf((byte)'+');
+
+                if (plusIndex != -1 && keyString.Length > plusIndex + 32)
+                {
+                    var secondGuidString = keyString.Slice(plusIndex + 1, 32);
+                    return Utf8Parser.TryParse(secondGuidString, out observerId, out var len, 'N') && len == 32;
+                }
+
+                observerId = default;
+                return false;
             }
         }
 
@@ -93,12 +129,12 @@ namespace Orleans
             private static readonly Func<object, Task> HandleFunc = self => ((LocalObjectData)self).LocalObjectMessagePumpAsync();
             private readonly InvokableObjectManager _manager;
 
-            internal LocalObjectData(IAddressable obj, ObserverGrainId observerId, InvokableObjectManager manager)
+            public LocalObjectData(IAddressable obj, ObserverGrainId observerId, InvokableObjectManager manager)
             {
-                this.LocalObject = new WeakReference(obj);
-                this.ObserverId = observerId;
-                this.Messages = new Queue<Message>();
-                this.Running = false;
+                LocalObject = new WeakReference(obj);
+                ObserverId = observerId;
+                Messages = new Queue<Message>();
+                Running = false;
                 _manager = manager;
             }
 

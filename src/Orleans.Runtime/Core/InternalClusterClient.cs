@@ -68,6 +68,13 @@ namespace Orleans.Runtime
         }
 
         /// <inheritdoc />
+        public TGrainObserverInterface CreateObjectReference<TGrainObserverInterface>(IGrainObserver obj, Guid observerId)
+            where TGrainObserverInterface : IGrainObserver
+        {
+            return this.grainFactory.CreateObjectReference<TGrainObserverInterface>(obj, observerId);
+        }
+
+        /// <inheritdoc />
         public void DeleteObjectReference<TGrainObserverInterface>(IGrainObserver obj) where TGrainObserverInterface : IGrainObserver
         {
             this.grainFactory.DeleteObjectReference<TGrainObserverInterface>(obj);

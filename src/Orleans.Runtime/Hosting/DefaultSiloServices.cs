@@ -45,6 +45,7 @@ using Orleans.Core;
 using Orleans.Placement.Repartitioning;
 using Orleans.GrainDirectory;
 using Orleans.Runtime.Hosting;
+using Orleans.ClientObservers;
 
 namespace Orleans.Hosting
 {
@@ -325,6 +326,7 @@ namespace Orleans.Hosting
             services.AddTransient<IOptions<MessagingOptions>>(static sp => sp.GetRequiredService<IOptions<SiloMessagingOptions>>());
 
             // Enable hosted client.
+            services.TryAddSingleton<IGrainObserverFactory, GrainObserverFactory>();
             services.TryAddSingleton<HostedClient>();
             services.AddFromExisting<ILifecycleParticipant<ISiloLifecycle>, HostedClient>();
             services.TryAddSingleton<InternalClusterClient>();

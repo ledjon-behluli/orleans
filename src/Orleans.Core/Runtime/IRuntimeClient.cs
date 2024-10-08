@@ -51,6 +51,7 @@ namespace Orleans.Runtime
         void ReceiveResponse(Message message);
 
         IAddressable CreateObjectReference(IAddressable obj);
+        IAddressable CreateObjectReference(IAddressable obj, Guid observerId);
 
         void DeleteObjectReference(IAddressable obj);
 

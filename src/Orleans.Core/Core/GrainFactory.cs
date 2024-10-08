@@ -79,12 +79,24 @@ namespace Orleans
             return (TGrainInterface)GetGrain(typeof(TGrainInterface), grainKey, grainClassNamePrefix: grainClassNamePrefix);
         }
 
+        public TGrainObserverInterface CreateObjectReference<TGrainObserverInterface>(IAddressable obj)
+            where TGrainObserverInterface : IAddressable
+        {
+            return (TGrainObserverInterface)this.CreateObjectReference(typeof(TGrainObserverInterface), obj);
+        }
 
         /// <inheritdoc />
         public TGrainObserverInterface CreateObjectReference<TGrainObserverInterface>(IGrainObserver obj)
             where TGrainObserverInterface : IGrainObserver
         {
-            return this.CreateObjectReference<TGrainObserverInterface>((IAddressable)obj);
+            return (TGrainObserverInterface)this.CreateObjectReference(typeof(TGrainObserverInterface), obj);
+        }
+
+        /// <inheritdoc />
+        public TGrainObserverInterface CreateObjectReference<TGrainObserverInterface>(IGrainObserver obj, Guid observerId)
+            where TGrainObserverInterface : IGrainObserver
+        {
+            return (TGrainObserverInterface)this.CreateObjectReference(typeof(TGrainObserverInterface), obj, observerId);
         }
 
         /// <inheritdoc />
@@ -92,13 +104,6 @@ namespace Orleans
             IGrainObserver obj) where TGrainObserverInterface : IGrainObserver
         {
             this.runtimeClient.DeleteObjectReference(obj);
-        }
-
-        /// <inheritdoc />
-        public TGrainObserverInterface CreateObjectReference<TGrainObserverInterface>(IAddressable obj)
-                where TGrainObserverInterface : IAddressable
-        {
-            return (TGrainObserverInterface)this.CreateObjectReference(typeof(TGrainObserverInterface), obj);
         }
 
         /// <inheritdoc />
@@ -236,7 +241,7 @@ namespace Orleans
         /// <param name="interfaceType">The interface type which the reference must implement..</param>
         /// <param name="obj">The addressable object implementation.</param>
         /// <returns>An object reference.</returns>
-        private object CreateObjectReference(Type interfaceType, IAddressable obj)
+        private object CreateObjectReference(Type interfaceType, IAddressable obj, Guid? observerId = null)
         {
             if (!interfaceType.IsInterface)
             {
@@ -249,7 +254,11 @@ namespace Orleans
                 throw new ArgumentException($"The provided object must implement '{interfaceType.FullName}'.", nameof(obj));
             }
 
-            return this.Cast(this.runtimeClient.CreateObjectReference(obj), interfaceType);
+            var addressable = !observerId.HasValue ?
+                runtimeClient.CreateObjectReference(obj) :
+                runtimeClient.CreateObjectReference(obj, observerId.Value);
+
+            return this.Cast(addressable, interfaceType);
         }
 
         /// <summary>

@@ -468,6 +468,12 @@ namespace Orleans.Runtime
             throw new InvalidOperationException("Cannot create a local object reference from a grain.");
         }
 
+        public IAddressable CreateObjectReference(IAddressable obj, Guid observerId)
+        {
+            if (RuntimeContext.Current is null) return this.HostedClient.CreateObjectReference(obj, observerId);
+            throw new InvalidOperationException("Cannot create a local object reference from a grain.");
+        }
+
         public void DeleteObjectReference(IAddressable obj)
         {
             if (RuntimeContext.Current is null)
