@@ -130,6 +130,7 @@
   </Folder>
   <Folder Name="/test/">
     <Project Path="test/Orleans.Testing.Reminders/Orleans.Testing.Reminders.csproj" />
+    <Project Path="test/ConsoleApp1/ConsoleApp1.csproj" Id="1a23bcb5-61bb-4c88-83b8-583464b59565" />
     <Project Path="test/Orleans.Analyzers.Tests/Orleans.Analyzers.Tests.csproj" />
     <Project Path="test/Orleans.DefaultCluster.Tests/Orleans.DefaultCluster.Tests.csproj" />
     <Project Path="test/Orleans.DependencyInjection.Tests/Orleans.DependencyInjection.Tests.csproj" />
