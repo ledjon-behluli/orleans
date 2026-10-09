@@ -25,7 +25,6 @@ internal sealed partial class AsyncEnumerableGrainObserverExtension : IAsyncEnum
 
     private readonly Dictionary<Guid, EnumeratorState> _enumerators = [];
     private readonly IGrainContext _grainContext;
-    private readonly MessagingOptions _messagingOptions;
     private readonly TimeSpan _cleanupPeriod;
     private readonly TimeSpan _longPollTimeout;
     private readonly TimeSpan _disposeTimeout;
@@ -44,12 +43,9 @@ internal sealed partial class AsyncEnumerableGrainObserverExtension : IAsyncEnum
     {
         _logger = logger;
         _grainContext = grainContext;
-        _messagingOptions = messagingOptions.Value;
-
-        _cleanupPeriod = _messagingOptions.ResponseTimeout;
-        _disposeTimeout = _messagingOptions.ResponseTimeout;
-        _longPollTimeout = _messagingOptions.ConfiguredResponseTimeout / 2;
-
+        _cleanupPeriod = messagingOptions.Value.ResponseTimeout;
+        _disposeTimeout = messagingOptions.Value.ResponseTimeout;
+        _longPollTimeout = messagingOptions.Value.ConfiguredResponseTimeout / 2;
         _cleanupTask = RunCleanupLoopAsync(_shutdownCts.Token);
     }
 
@@ -63,7 +59,7 @@ internal sealed partial class AsyncEnumerableGrainObserverExtension : IAsyncEnum
             {
                 try
                 {
-                    List<EnumeratorState>? expired = null;
+                    List<(Guid RequestId, EnumeratorState State)>? expired = null;
 
                     lock (_lock)
                     {
@@ -76,8 +72,7 @@ internal sealed partial class AsyncEnumerableGrainObserverExtension : IAsyncEnum
                         {
                             if (!state.TryEnter())
                             {
-                                // We skip entries that currently have a MoveNext in-flight.
-                                continue;
+                                continue; // We skip once that currently have an in-flight MoveNext call.
                             }
 
                             try
@@ -86,9 +81,9 @@ internal sealed partial class AsyncEnumerableGrainObserverExtension : IAsyncEnum
                                 {
                                     state.Seen = false;
                                 }
-                                else if (_enumerators.Remove(requestId))
+                                else
                                 {
-                                    (expired ??= []).Add(state);
+                                    (expired ??= []).Add((requestId, state));
                                 }
                             }
                             finally
@@ -96,11 +91,19 @@ internal sealed partial class AsyncEnumerableGrainObserverExtension : IAsyncEnum
                                 state.Exit();
                             }
                         }
+
+                        if (expired is not null)
+                        {
+                            foreach (var (requestId, _) in expired)
+                            {
+                                _enumerators.Remove(requestId);
+                            }
+                        }
                     }
 
                     if (expired is not null)
                     {
-                        foreach (var state in expired)
+                        foreach (var (_, state) in expired)
                         {
                             await DisposeEnumeratorAsync(state).ConfigureAwait(false);
                         }
