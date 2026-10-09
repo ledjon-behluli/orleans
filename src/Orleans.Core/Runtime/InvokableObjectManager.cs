@@ -118,12 +118,17 @@ namespace Orleans
             private const int MaxPendingCancellations = 1_024;
             private static readonly Func<object?, Task> HandleFunc = self => ((LocalObjectData)self!).LocalObjectMessagePumpAsync();
             private readonly InvokableObjectManager _manager;
-            private readonly object _extensionsLock = new();
             private readonly Dictionary<(GrainId SenderGrainId, CorrelationId MessageId), LinkedListNode<(GrainId, CorrelationId)>> _pendingCancellations = [];
             private readonly LinkedList<(GrainId SenderGrainId, CorrelationId MessageId)> _pendingCancellationOrder = [];
             private readonly Dictionary<Message, Task?> _runningRequests = [];
             private Task? _messagePumpTask;
             private bool _disposed;
+
+#if NET10_0_OR_GREATER
+    private readonly Lock _extensionsLock = new();
+#else
+            private readonly object _extensionsLock = new();
+#endif
             private AsyncEnumerableGrainObserverExtension? _asyncEnumerableExtension;
 
             internal LocalObjectData(IAddressable obj, ObserverGrainId observerId, InvokableObjectManager manager)
