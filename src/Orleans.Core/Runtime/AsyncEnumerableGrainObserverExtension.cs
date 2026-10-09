@@ -183,12 +183,14 @@ internal sealed partial class AsyncEnumerableGrainObserverExtension : IAsyncEnum
 
         return state.Enumerator is IAsyncEnumerator<T> typedEnumerator ?
             MoveNextCoreAsync(requestId, state, typedEnumerator, cancellationToken) :
-            ValueTask.FromResult<(EnumerationResult, object?)>((EnumerationResult.Error, new InvalidCastException("Attempted to access an enumerator of the wrong type.")));
+            new((EnumerationResult.Error, new InvalidCastException("Attempted to access an enumerator of the wrong type.")));
     }
 
     private async ValueTask<(EnumerationResult Status, object? Value)> MoveNextCoreAsync<T>(
         Guid requestId, EnumeratorState state, IAsyncEnumerator<T> typedEnumerator, CancellationToken cancellationToken)
     {
+        Debug.Assert(state.MaxBatchSize > 0, "Max batch size must be positive.");
+
         await state.WaitToEnterAsync(cancellationToken).ConfigureAwait(false);
 
         (EnumerationResult Status, object? Value) result;
@@ -226,9 +228,8 @@ internal sealed partial class AsyncEnumerableGrainObserverExtension : IAsyncEnum
             {
                 if (!_enumerators.TryGetValue(requestId, out var current) || !ReferenceEquals(current, state))
                 {
-                    // Cleanup or an explicit dispose removed us while we waited on the
-                    // gate. Report it as terminated so the caller disposes the state
-                    // (idempotent via state.Disposed).
+                    // Periodic cleanup or an explicit dispose removed us while we waited on the gate.
+                    // We report the emurator as 'terminated' so the caller disposes it.
                     return (EnumerationResult.MissingEnumeratorError, default);
                 }
             }
@@ -239,38 +240,139 @@ internal sealed partial class AsyncEnumerableGrainObserverExtension : IAsyncEnum
 
             if (currentTask is null)
             {
-                var (fillStatus, fillValue, pendingTask) = AsyncEnumeratorHelper.FillBatchSync(typedEnumerator, state.MaxBatchSize);
+                var (fillResult, fillValue, pendingTask) = FillBatch(typedEnumerator, state.MaxBatchSize);
 
                 if (pendingTask is { })
                 {
                     state.MoveNextTask = pendingTask;
                 }
 
-                if (fillStatus is EnumerationResult.Element or EnumerationResult.Batch)
+                if (fillResult is EnumerationResult.Element or EnumerationResult.Batch)
                 {
-                    return (fillStatus, fillValue);
+                    return (fillResult, fillValue);
                 }
 
-                if (!fillStatus.IsActive())
+                if (fillResult.IsTerminated())
                 {
-                    // Error, Completed, CompletedWithElement, CompletedWithBatch.
-                    return (fillStatus, fillValue);
+                    return (fillResult, fillValue);
                 }
 
-                Debug.Assert(fillStatus is EnumerationResult.Heartbeat);
+                Debug.Assert(fillResult is EnumerationResult.Heartbeat);
+
                 currentTask = state.MoveNextTask!;
             }
 
-            var (status, value) = await AsyncEnumeratorHelper
-                .AwaitPendingMoveNextAsync(typedEnumerator, currentTask, _longPollTimeout, cancellationToken)
-                .ConfigureAwait(false);
+            var (result, value) = await AwaitPendingMoveNextAsync(typedEnumerator, currentTask, _longPollTimeout, cancellationToken).ConfigureAwait(false);
 
             if (currentTask.IsCompleted)
             {
                 state.MoveNextTask = null;
             }
 
-            return (status, value);
+            return (result, value);
+        }
+
+        static (EnumerationResult Result, object? Value, Task<bool>? PendingTask) FillBatch(IAsyncEnumerator<T> enumerator, int maxBatchSize)
+        {
+            var count = 0;
+            object? result = null;
+
+            try
+            {
+                while (count < maxBatchSize)
+                {
+                    var moveNext = enumerator.MoveNextAsync();
+
+                    // Check if the enumerator has a result ready synchronously.
+                    if (!moveNext.IsCompletedSuccessfully)
+                    {
+                        return new(count switch
+                        {
+                            0 => EnumerationResult.Heartbeat,
+                            1 => EnumerationResult.Element,
+                            _ => EnumerationResult.Batch,
+                        }, result, moveNext.AsTask());
+                    }
+
+                    if (!moveNext.Result)
+                    {
+                        return new(count switch
+                        {
+                            0 => EnumerationResult.Completed,
+                            1 => EnumerationResult.CompletedWithElement,
+                            _ => EnumerationResult.CompletedWithBatch,
+                        }, result, null);
+                    }
+
+                    ++count; // Account for the just-emitted element.
+
+                    var value = enumerator.Current;
+
+                    switch (count)
+                    {
+                        case 1: result = value; break;
+                        case 2: result = new List<T> { (T)result!, value }; break;
+                        default: ((List<T>)result!).Add(value); break;
+                    }
+                }
+
+                return new(count == 1 ? EnumerationResult.Element : EnumerationResult.Batch, result, null);
+            }
+            catch (Exception exception)
+            {
+                return new(EnumerationResult.Error, exception, null);
+            }
+        }
+
+        static async ValueTask<(EnumerationResult Status, object? Value)> AwaitPendingMoveNextAsync(
+            IAsyncEnumerator<T> enumerator, Task<bool> moveNextTask, TimeSpan longPollTimeout, CancellationToken callerToken)
+        {
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(callerToken);
+
+            timeoutCts.CancelAfter(longPollTimeout);
+
+            try
+            {
+                await moveNextTask.WaitAsync(timeoutCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (callerToken.IsCancellationRequested)
+            {
+                // Regardless of the task's state, we surface cancellation as the caller is the one who cancelled it.
+                return (EnumerationResult.Canceled, null);
+            }
+            catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
+            {
+                // Long-poll elapsed, or the task itself was cancelled.
+                // If the task is still in flight, we report a heartbeat; otherwise fall through and classify its outcome.
+                if (!moveNextTask.IsCompleted)
+                {
+                    return (EnumerationResult.Heartbeat, null);
+                }
+            }
+            catch
+            {
+                // Ignore, the task faulted! We will classify the error from the task itself.
+            }
+
+            Debug.Assert(moveNextTask.IsCompleted);
+
+            if (moveNextTask.IsCompletedSuccessfully)
+            {
+#pragma warning disable CA1849 // It wont be faulted if we are here!
+                return moveNextTask.Result ? (EnumerationResult.Element, enumerator.Current) : (EnumerationResult.Completed, null);
+#pragma warning restore CA1849
+            }
+
+            if (moveNextTask.IsCanceled)
+            {
+                return (EnumerationResult.Canceled, null);
+            }
+
+            Debug.Assert(moveNextTask.IsFaulted);
+            Debug.Assert(moveNextTask.Exception is not null);
+
+            var exception = moveNextTask.Exception;
+            return (EnumerationResult.Error, exception.InnerExceptions.Count == 1 ? exception.InnerException! : exception);
         }
     }
 
