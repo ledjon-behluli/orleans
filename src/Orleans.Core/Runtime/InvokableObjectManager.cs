@@ -7,6 +7,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using Orleans.Configuration;
 using Orleans.Internal;
 using Orleans.Runtime;
 using Orleans.Serialization;
@@ -62,7 +64,8 @@ namespace Orleans
                 return false;
             }
 
-            objectData.OnDeregistered();
+            objectData?.Dispose();
+
             return true;
         }
 
@@ -110,15 +113,18 @@ namespace Orleans
             }
         }
 
-        public sealed partial class LocalObjectData : IGrainContext, IGrainCallCancellationExtension
+        public sealed partial class LocalObjectData : IGrainContext, IGrainCallCancellationExtension, IDisposable
         {
             private const int MaxPendingCancellations = 1_024;
             private static readonly Func<object?, Task> HandleFunc = self => ((LocalObjectData)self!).LocalObjectMessagePumpAsync();
             private readonly InvokableObjectManager _manager;
+            private readonly object _extensionsLock = new();
             private readonly Dictionary<(GrainId SenderGrainId, CorrelationId MessageId), LinkedListNode<(GrainId, CorrelationId)>> _pendingCancellations = [];
             private readonly LinkedList<(GrainId SenderGrainId, CorrelationId MessageId)> _pendingCancellationOrder = [];
             private readonly Dictionary<Message, Task?> _runningRequests = [];
             private Task? _messagePumpTask;
+            private bool _disposed;
+            private AsyncEnumerableGrainObserverExtension? _asyncEnumerableExtension;
 
             internal LocalObjectData(IAddressable obj, ObserverGrainId observerId, InvokableObjectManager manager)
             {
@@ -126,6 +132,7 @@ namespace Orleans
                 this.ObserverId = observerId;
                 this.Messages = new Queue<Message>();
                 this.Running = false;
+
                 _manager = manager;
             }
 
@@ -163,7 +170,28 @@ namespace Orleans
 
             public object? GetComponent(Type componentType)
             {
-                if (componentType.IsAssignableFrom(this.LocalObject.Target?.GetType()))
+                if (componentType == typeof(IAsyncEnumerableGrainExtension))
+                {
+                    lock (_extensionsLock)
+                    {
+                        if (_disposed)
+                        {
+                            throw new ObjectDisposedException(nameof(LocalObjectData));
+                        }
+
+                        if (_asyncEnumerableExtension is not null)
+                        {
+                            return _asyncEnumerableExtension;
+                        }
+
+                        _asyncEnumerableExtension = new AsyncEnumerableGrainObserverExtension(this,
+                            _manager.runtimeClient.ServiceProvider.GetRequiredService<IOptions<MessagingOptions>>(),
+                            _manager.runtimeClient.ServiceProvider.GetRequiredService<ILogger<AsyncEnumerableGrainObserverExtension>>());
+
+                        return _asyncEnumerableExtension;
+                    }
+                }
+                else if (componentType.IsAssignableFrom(this.LocalObject.Target?.GetType()))
                 {
                     return LocalObject.Target;
                 }
@@ -417,13 +445,32 @@ namespace Orleans
                 }
             }
 
-            internal void OnDeregistered()
+            public void Dispose()
             {
                 lock (Messages)
                 {
                     _pendingCancellations.Clear();
                     _pendingCancellationOrder.Clear();
                 }
+
+                AsyncEnumerableGrainObserverExtension? extension;
+
+                lock (_extensionsLock)
+                {
+                    if (_disposed)
+                    {
+                        return;
+                    }
+
+                    _disposed = true;
+
+                    extension = _asyncEnumerableExtension;
+
+                    _asyncEnumerableExtension = null;
+                }
+
+                // Intentionally calling Dispose() as it internally disposes in a FF style. 
+                extension?.Dispose();
             }
 
             private bool TryTakePendingCancellation(Message message)

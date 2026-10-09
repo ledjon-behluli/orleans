@@ -8,6 +8,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Configuration;
 using Orleans.Internal;
+using static System.Runtime.InteropServices.JavaScript.JSType;
 
 namespace Orleans.Runtime;
 
@@ -73,7 +74,7 @@ internal sealed partial class AsyncEnumerableGrainObserverExtension : IAsyncEnum
 
                         foreach (var (requestId, state) in _enumerators)
                         {
-                            if (!state.Gate.Wait(0, CancellationToken.None))
+                            if (!state.TryEnter())
                             {
                                 // We skip entries that currently have a MoveNext in-flight.
                                 continue;
@@ -92,7 +93,7 @@ internal sealed partial class AsyncEnumerableGrainObserverExtension : IAsyncEnum
                             }
                             finally
                             {
-                                state.Gate.Release();
+                                state.Exit();
                             }
                         }
                     }
@@ -188,19 +189,46 @@ internal sealed partial class AsyncEnumerableGrainObserverExtension : IAsyncEnum
     private async ValueTask<(EnumerationResult Status, object? Value)> MoveNextCoreAsync<T>(
         Guid requestId, EnumeratorState state, IAsyncEnumerator<T> typedEnumerator, CancellationToken cancellationToken)
     {
-        // We gate via the semaphore so there can only be one MoveNext at a time per enumerator.
-        await state.Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        await state.WaitToEnterAsync(cancellationToken).ConfigureAwait(false);
+
+        (EnumerationResult Status, object? Value) result;
 
         try
         {
+            result = await DoMoveNextAsync().ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            result = (EnumerationResult.Error, exception);
+        }
+        finally
+        {
+            state.Exit();
+        }
+
+        // We dispose the enumerator *outside* the gate, since DisposeEnumeratorBodyAsync
+        // acquires the gate itself, so we must have released it by now.
+        if (result.Status.IsTerminated())
+        {
             lock (_lock)
             {
-                // Cleanup or an explicit dispose may have removed us while we waited on the gate.
-                // So we re-check under the lock before touching the state, otherwise we could run
-                // MoveNext on an enumerator that's already being torn down.
+                _enumerators.Remove(requestId);
+            }
 
+            await DisposeEnumeratorAsync(state).ConfigureAwait(false);
+        }
+
+        return result;
+
+        async ValueTask<(EnumerationResult Status, object? Value)> DoMoveNextAsync()
+        {
+            lock (_lock)
+            {
                 if (!_enumerators.TryGetValue(requestId, out var current) || !ReferenceEquals(current, state))
                 {
+                    // Cleanup or an explicit dispose removed us while we waited on the
+                    // gate. Report it as terminated so the caller disposes the state
+                    // (idempotent via state.Disposed).
                     return (EnumerationResult.MissingEnumeratorError, default);
                 }
             }
@@ -211,30 +239,25 @@ internal sealed partial class AsyncEnumerableGrainObserverExtension : IAsyncEnum
 
             if (currentTask is null)
             {
-                var (result, val, pendingTask) = AsyncEnumeratorHelper.FillBatchSync(typedEnumerator, state.MaxBatchSize);
-
-                if (result is EnumerationResult.Error)
-                {
-                    return await TerminateAsync(requestId, state, EnumerationResult.Error, val).ConfigureAwait(false);
-                }
+                var (fillStatus, fillValue, pendingTask) = AsyncEnumeratorHelper.FillBatchSync(typedEnumerator, state.MaxBatchSize);
 
                 if (pendingTask is { })
                 {
                     state.MoveNextTask = pendingTask;
                 }
 
-                if (result is EnumerationResult.Element or EnumerationResult.Batch)
+                if (fillStatus is EnumerationResult.Element or EnumerationResult.Batch)
                 {
-                    return (result, val);
+                    return (fillStatus, fillValue);
                 }
 
-                if (result.IsTerminated())
+                if (!fillStatus.IsActive())
                 {
-                    return await TerminateAsync(requestId, state, result, val).ConfigureAwait(false);
+                    // Error, Completed, CompletedWithElement, CompletedWithBatch.
+                    return (fillStatus, fillValue);
                 }
 
-                Debug.Assert(result is EnumerationResult.Heartbeat);
-
+                Debug.Assert(fillStatus is EnumerationResult.Heartbeat);
                 currentTask = state.MoveNextTask!;
             }
 
@@ -242,40 +265,13 @@ internal sealed partial class AsyncEnumerableGrainObserverExtension : IAsyncEnum
                 .AwaitPendingMoveNextAsync(typedEnumerator, currentTask, _longPollTimeout, cancellationToken)
                 .ConfigureAwait(false);
 
-            // If the pending task finished, we drop it so the next call starts a fresh batch.
             if (currentTask.IsCompleted)
             {
                 state.MoveNextTask = null;
             }
 
-            if (status.IsTerminated())
-            {
-                return await TerminateAsync(requestId, state, status, value).ConfigureAwait(false);
-            }
-
             return (status, value);
         }
-        catch (Exception exception)
-        {
-            return await TerminateAsync(requestId, state, EnumerationResult.Error, exception).ConfigureAwait(false);
-        }
-        finally
-        {
-            state.Gate.Release();
-        }
-    }
-
-    private async ValueTask<(EnumerationResult Status, object? Value)> TerminateAsync(
-        Guid requestId, EnumeratorState state, EnumerationResult status, object? value)
-    {
-        lock (_lock)
-        {
-            _enumerators.Remove(requestId);
-        }
-
-        await DisposeEnumeratorBodyAsync(state).ConfigureAwait(false);
-
-        return (status, value);
     }
 
     ValueTask IAsyncEnumerableGrainExtension.DisposeAsync(Guid requestId) =>
@@ -298,9 +294,9 @@ internal sealed partial class AsyncEnumerableGrainObserverExtension : IAsyncEnum
         await DisposeEnumeratorAsync(state).ConfigureAwait(false);
     }
 
-    void IDisposable.Dispose() => ((IAsyncDisposable)this).DisposeAsync().AsTask().Ignore();
+    public void Dispose() => DisposeAsync().AsTask().Ignore();
 
-    ValueTask IAsyncDisposable.DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         lock (_lock)
         {
@@ -323,17 +319,16 @@ internal sealed partial class AsyncEnumerableGrainObserverExtension : IAsyncEnum
                 _enumerators.Clear();
             }
 
-            _disposeTask = DisposeCoreAsync(enumerators);
+            _disposeTask = DoDisposeAsync(enumerators);
 
             return new(_disposeTask);
         }
 
-        async Task DisposeCoreAsync(List<EnumeratorState> enumerators)
+        async Task DoDisposeAsync(List<EnumeratorState> enumerators)
         {
             await _shutdownCts.CancelAsync().ConfigureAwait(false);
             await _cleanupTask.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
-
-            _shutdownCts.Dispose();
+            try { _shutdownCts.Dispose(); } catch { }
 
             foreach (var state in enumerators)
             {
@@ -344,91 +339,69 @@ internal sealed partial class AsyncEnumerableGrainObserverExtension : IAsyncEnum
 
     private async ValueTask DisposeEnumeratorAsync(EnumeratorState state)
     {
-        // We cancel first so any in-flight MoveNext unblocks promptly. Safe without the gate.
-        try
-        {
-            await state.CancellationTokenSource.CancelAsync().ConfigureAwait(false);
-        }
-        catch (Exception exception)
-        {
-            LogWarningErrorCancelingEnumerator(exception);
-        }
-
-        var gateAcquired = false;
+        // In the Terminate path the state has already been removed
+        // from _enumerators and the caller has released the gate, so this is uncontended.
+        // But in the external DisposeAsync path we may briefly contend with an in-flight
+        // MoveNext (bounded by _disposeTimeout), so we acquire the gate!
+        using var timeoutCts = new CancellationTokenSource(_disposeTimeout);
 
         try
         {
-            using var timeoutCts = new CancellationTokenSource(_disposeTimeout);
-
-            try
-            {
-                await state.Gate.WaitAsync(timeoutCts.Token).ConfigureAwait(false);
-                gateAcquired = true;
-            }
-            catch (OperationCanceledException)
-            {
-                return; // In-flight MoveNext handles disposal itself.
-            }
-            catch (Exception exception)
-            {
-                LogWarningErrorDisposingEnumerator(exception);
-                return;
-            }
-
-            // We got the gate acquired so we can dispose the enumerator ourselves.
-            await DisposeEnumeratorBodyAsync(state).ConfigureAwait(false);
+            await state.WaitToEnterAsync(timeoutCts.Token).ConfigureAwait(false);
         }
-        finally
+        catch (OperationCanceledException)
         {
-            if (gateAcquired)
-            {
-                state.Gate.Release();
-            }
-        }
-    }
-
-    private async ValueTask DisposeEnumeratorBodyAsync(EnumeratorState state)
-    {
-        if (state.Disposed)
-        {
+            // The in-flight MoveNext will observe that the state was removed from _enumerators and dispose.
+            LogWarningErrorDisposingEnumerator(new TimeoutException("Timed out waiting to dispose the enumerator."));
             return;
         }
 
-        state.Disposed = true;
-
         try
         {
-            await state.CancellationTokenSource.CancelAsync().ConfigureAwait(false);
-        }
-        catch (Exception exception)
-        {
-            LogWarningErrorCancelingEnumerator(exception);
-        }
+            if (state.Disposed)
+            {
+                return;
+            }
 
-        if (state.MoveNextTask is { IsCompleted: false } pending)
-        {
+            state.Disposed = true;
+
             try
             {
-                await pending.WaitAsync(_disposeTimeout).ConfigureAwait(false);
+                await state.CancellationTokenSource.CancelAsync().ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                LogWarningErrorCancelingEnumerator(exception);
+            }
+
+            if (state.MoveNextTask is { IsCompleted: false } pending)
+            {
+                try
+                {
+                    await pending.WaitAsync(_disposeTimeout).ConfigureAwait(false);
+                }
+                catch (Exception exception)
+                {
+                    LogWarningErrorDisposingEnumerator(exception);
+                }
+            }
+
+            try
+            {
+                await state.Enumerator.DisposeAsync().AsTask().WaitAsync(_disposeTimeout).ConfigureAwait(false);
             }
             catch (Exception exception)
             {
                 LogWarningErrorDisposingEnumerator(exception);
             }
-        }
-
-        try
-        {
-            await state.Enumerator.DisposeAsync().AsTask().WaitAsync(_disposeTimeout).ConfigureAwait(false);
-        }
-        catch (Exception exception)
-        {
-            LogWarningErrorDisposingEnumerator(exception);
+            finally
+            {
+                state.CancellationTokenSource.Dispose();
+            }
         }
         finally
         {
-            state.CancellationTokenSource.Dispose();
-            // NOTE: We do not release the semaphore as we may still be holding it (check the TerminateAsync path).
+            state.Exit();
         }
     }
 
@@ -443,6 +416,10 @@ internal sealed partial class AsyncEnumerableGrainObserverExtension : IAsyncEnum
         public Task<bool>? MoveNextTask { get; set; }
 
         public SemaphoreSlim Gate { get; } = new(1, 1);
+
+        public bool TryEnter() => Gate.Wait(0);
+        public Task WaitToEnterAsync(CancellationToken cancellationToken) => Gate.WaitAsync(cancellationToken);
+        public void Exit() => Gate.Release();
     }
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Error canceling observer async enumerator.")]

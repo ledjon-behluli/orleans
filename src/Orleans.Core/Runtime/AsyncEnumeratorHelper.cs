@@ -28,6 +28,7 @@ internal static class AsyncEnumeratorHelper
             {
                 var moveNext = enumerator.MoveNextAsync();
 
+                // Check if the enumerator has a result ready synchronously.
                 if (!moveNext.IsCompletedSuccessfully)
                 {
                     return new(count switch
@@ -48,7 +49,7 @@ internal static class AsyncEnumeratorHelper
                     }, result, null);
                 }
 
-                ++count;
+                ++count; // Account for the just-emitted element.
 
                 var value = enumerator.Current;
 
@@ -71,10 +72,10 @@ internal static class AsyncEnumeratorHelper
     /// <summary>
     /// Awaits a pending MoveNext with a long-poll timeout, then classifies the outcome.
     /// </summary>
-    public static async ValueTask<(EnumerationResult Status, object? Value)> AwaitPendingMoveNextAsync<T>(
-        IAsyncEnumerator<T> enumerator, Task<bool> moveNextTask, TimeSpan longPollTimeout, CancellationToken cancellationToken)
+    public static async ValueTask<(EnumerationResult Status, object? Value)>
+        AwaitPendingMoveNextAsync<T>(IAsyncEnumerator<T> enumerator, Task<bool> moveNextTask, TimeSpan longPollTimeout, CancellationToken callerToken)
     {
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(callerToken);
 
         timeoutCts.CancelAfter(longPollTimeout);
 
@@ -82,37 +83,32 @@ internal static class AsyncEnumeratorHelper
         {
             await moveNextTask.WaitAsync(timeoutCts.Token).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (callerToken.IsCancellationRequested)
         {
+            // Regardless of the task's state, we surface cancellation as the caller is the one who cancelled it.
             return (EnumerationResult.Canceled, null);
         }
         catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
         {
             // Long-poll elapsed, or the task itself was cancelled.
-            if (moveNextTask.IsCompleted)
+            // If the task is still in flight, we report a heartbeat; otherwise fall through and classify its outcome.
+            if (!moveNextTask.IsCompleted)
             {
-                return ClassifyPending(enumerator, moveNextTask);
+                return (EnumerationResult.Heartbeat, null);
             }
-
-            return (EnumerationResult.Heartbeat, null);
         }
         catch
         {
-            // Task faulted, we will classify below.
+            // Ignore, the task faulted! We will classify the error from the task itself.
         }
 
-        return ClassifyPending(enumerator, moveNextTask);
-    }
-
-    // TODO: Inline this likely!!!
-    /// <summary>Classifies a completed MoveNext task.</summary>
-    public static (EnumerationResult Status, object? Value) ClassifyPending<T>(IAsyncEnumerator<T> enumerator, Task<bool> moveNextTask)
-    {
         Debug.Assert(moveNextTask.IsCompleted);
 
         if (moveNextTask.IsCompletedSuccessfully)
         {
+#pragma warning disable CA1849 // It wont be faulted if we are here!
             return moveNextTask.Result ? (EnumerationResult.Element, enumerator.Current) : (EnumerationResult.Completed, null);
+#pragma warning restore CA1849
         }
 
         if (moveNextTask.IsCanceled)
@@ -124,7 +120,6 @@ internal static class AsyncEnumeratorHelper
         Debug.Assert(moveNextTask.Exception is not null);
 
         var exception = moveNextTask.Exception;
-        
         return (EnumerationResult.Error, exception.InnerExceptions.Count == 1 ? exception.InnerException! : exception);
     }
 }
