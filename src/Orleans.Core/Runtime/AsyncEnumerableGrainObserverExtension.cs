@@ -207,44 +207,43 @@ internal sealed partial class AsyncEnumerableGrainObserverExtension : IAsyncEnum
 
             state.Seen = true;
 
-            var pendingTask = state.MoveNextTask;
+            var currentTask = state.MoveNextTask;
 
-            if (pendingTask is null)
+            if (currentTask is null)
             {
-                var result = AsyncEnumeratorHelper.FillBatchSync(typedEnumerator, state.MaxBatchSize);
+                var (result, val, pendingTask) = AsyncEnumeratorHelper.FillBatchSync(typedEnumerator, state.MaxBatchSize);
 
-                if (result.Status is EnumerationResult.Error)
+                if (result is EnumerationResult.Error)
                 {
-                    return await TerminateAsync(requestId, state, EnumerationResult.Error, result.Value).ConfigureAwait(false);
+                    return await TerminateAsync(requestId, state, EnumerationResult.Error, val).ConfigureAwait(false);
                 }
 
-                if (result.PendingTask is { } pending)
+                if (pendingTask is { })
                 {
-                    state.MoveNextTask = pending;
+                    state.MoveNextTask = pendingTask;
                 }
 
-                if (result.Status is EnumerationResult.Element or EnumerationResult.Batch)
+                if (result is EnumerationResult.Element or EnumerationResult.Batch)
                 {
-                    // It means we producd elements *synchronously*, so we return them now.
-                    return (result.Status, result.Value);
+                    return (result, val);
                 }
 
-                if (result.Status.IsTerminated())
+                if (result.IsTerminated())
                 {
-                    return await TerminateAsync(requestId, state, result.Status, result.Value).ConfigureAwait(false);
+                    return await TerminateAsync(requestId, state, result, val).ConfigureAwait(false);
                 }
 
-                Debug.Assert(result.Status is EnumerationResult.Heartbeat);
+                Debug.Assert(result is EnumerationResult.Heartbeat);
 
-                pendingTask = state.MoveNextTask!;
+                currentTask = state.MoveNextTask!;
             }
 
             var (status, value) = await AsyncEnumeratorHelper
-                .AwaitPendingMoveNextAsync(typedEnumerator, pendingTask, _longPollTimeout, cancellationToken)
+                .AwaitPendingMoveNextAsync(typedEnumerator, currentTask, _longPollTimeout, cancellationToken)
                 .ConfigureAwait(false);
 
             // If the pending task finished, we drop it so the next call starts a fresh batch.
-            if (pendingTask.IsCompleted)
+            if (currentTask.IsCompleted)
             {
                 state.MoveNextTask = null;
             }

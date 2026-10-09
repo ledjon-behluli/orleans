@@ -11,24 +11,11 @@ namespace Orleans.Runtime;
 /// </summary>
 internal static class AsyncEnumeratorHelper
 {
-    public readonly struct BatchFillResult
-    {
-        public BatchFillResult(EnumerationResult status, object? value, Task<bool>? pendingTask)
-        {
-            Status = status;
-            Value = value;
-            PendingTask = pendingTask;
-        }
-
-        public EnumerationResult Status { get; }
-        public object? Value { get; }
-        public Task<bool>? PendingTask { get; }
-    }
-
     /// <summary>
     /// Attempts to synchronously produce up to <paramref name="maxBatchSize"/> elements.
     /// </summary>
-    public static BatchFillResult FillBatchSync<T>(IAsyncEnumerator<T> enumerator, int maxBatchSize)
+    public static (EnumerationResult Result, object? Value, Task<bool>? PendingTask)
+        FillBatchSync<T>(IAsyncEnumerator<T> enumerator, int maxBatchSize)
     {
         Debug.Assert(maxBatchSize > 0, "Max batch size must be positive.");
 
@@ -43,7 +30,7 @@ internal static class AsyncEnumeratorHelper
 
                 if (!moveNext.IsCompletedSuccessfully)
                 {
-                    return new BatchFillResult(count switch
+                    return new(count switch
                     {
                         0 => EnumerationResult.Heartbeat,
                         1 => EnumerationResult.Element,
@@ -53,12 +40,12 @@ internal static class AsyncEnumeratorHelper
 
                 if (!moveNext.Result)
                 {
-                    return new BatchFillResult(count switch
+                    return new(count switch
                     {
                         0 => EnumerationResult.Completed,
                         1 => EnumerationResult.CompletedWithElement,
                         _ => EnumerationResult.CompletedWithBatch,
-                    }, result, pendingTask: null);
+                    }, result, null);
                 }
 
                 ++count;
@@ -73,11 +60,11 @@ internal static class AsyncEnumeratorHelper
                 }
             }
 
-            return new BatchFillResult(count == 1 ? EnumerationResult.Element : EnumerationResult.Batch, result, pendingTask: null);
+            return new(count == 1 ? EnumerationResult.Element : EnumerationResult.Batch, result, null);
         }
         catch (Exception exception)
         {
-            return new BatchFillResult(EnumerationResult.Error, exception, pendingTask: null);
+            return new(EnumerationResult.Error, exception, null);
         }
     }
 
@@ -88,6 +75,7 @@ internal static class AsyncEnumeratorHelper
         IAsyncEnumerator<T> enumerator, Task<bool> moveNextTask, TimeSpan longPollTimeout, CancellationToken cancellationToken)
     {
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
         timeoutCts.CancelAfter(longPollTimeout);
 
         try
@@ -98,23 +86,25 @@ internal static class AsyncEnumeratorHelper
         {
             return (EnumerationResult.Canceled, null);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
         {
             // Long-poll elapsed, or the task itself was cancelled.
             if (moveNextTask.IsCompleted)
             {
                 return ClassifyPending(enumerator, moveNextTask);
             }
+
             return (EnumerationResult.Heartbeat, null);
         }
         catch
         {
-            // Task faulted; classify below.
+            // Task faulted, we will classify below.
         }
 
         return ClassifyPending(enumerator, moveNextTask);
     }
 
+    // TODO: Inline this likely!!!
     /// <summary>Classifies a completed MoveNext task.</summary>
     public static (EnumerationResult Status, object? Value) ClassifyPending<T>(IAsyncEnumerator<T> enumerator, Task<bool> moveNextTask)
     {
@@ -122,9 +112,7 @@ internal static class AsyncEnumeratorHelper
 
         if (moveNextTask.IsCompletedSuccessfully)
         {
-            return moveNextTask.Result
-                ? (EnumerationResult.Element, enumerator.Current)
-                : (EnumerationResult.Completed, null);
+            return moveNextTask.Result ? (EnumerationResult.Element, enumerator.Current) : (EnumerationResult.Completed, null);
         }
 
         if (moveNextTask.IsCanceled)
@@ -132,8 +120,11 @@ internal static class AsyncEnumeratorHelper
             return (EnumerationResult.Canceled, null);
         }
 
-        var exception = moveNextTask.Exception!;
-        var inner = exception.InnerExceptions.Count == 1 ? exception.InnerException! : exception;
-        return (EnumerationResult.Error, inner);
+        Debug.Assert(moveNextTask.IsFaulted);
+        Debug.Assert(moveNextTask.Exception is not null);
+
+        var exception = moveNextTask.Exception;
+        
+        return (EnumerationResult.Error, exception.InnerExceptions.Count == 1 ? exception.InnerException! : exception);
     }
 }
