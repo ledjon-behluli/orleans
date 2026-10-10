@@ -59,8 +59,7 @@ namespace Orleans
                 return false;
             }
 
-            Debug.Assert(objectData is not null);
-            objectData.DisposeAsync().Ignore();
+            objectData?.DisposeAsync().Ignore();
 
             return true;
         }
@@ -73,6 +72,13 @@ namespace Orleans
             // Cancellation controls can release admitted work while application admission is closed.
             await _invocations.CloseAsync().ConfigureAwait(false);
             await _cancellations.CloseAsync().ConfigureAwait(false);
+
+            // Dispose all registered observers, also cancelling any outstanding enumerators.
+            await Task.WhenAll(localObjects.Select(kvp =>
+            {
+                localObjects.TryRemove(kvp.Key, out var objectData);
+                return objectData?.DisposeAsync().AsTask() ?? Task.CompletedTask;
+            })).ConfigureAwait(false);
         }
 
         internal static bool IsCancellationRequest(Message message) =>
@@ -704,14 +710,14 @@ namespace Orleans
 
                 async Task RunDisposalAsync()
                 {
+                    lock (Messages)
+                    {
+                        _pendingCancellations.Clear();
+                        _pendingCancellationOrder.Clear();
+                    }
+
                     try
                     {
-                        lock (Messages)
-                        {
-                            _pendingCancellations.Clear();
-                            _pendingCancellationOrder.Clear();
-                        }
-
                         if (extension is not null)
                         {
                             await extension.DisposeAsync().ConfigureAwait(false);
@@ -746,6 +752,11 @@ namespace Orleans
         {
             public override string ToString() => observerId.ToString();
         }
+
+        [LoggerMessage(
+            Level = LogLevel.Warning,
+            Message = "Error disposing an observer during shutdown.")]
+        private static partial void LogErrorDisposingObservers(ILogger logger, Exception exception);
 
         [LoggerMessage(
             Level = LogLevel.Debug,

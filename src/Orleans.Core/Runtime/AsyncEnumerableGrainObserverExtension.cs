@@ -592,7 +592,8 @@ internal sealed partial class AsyncEnumerableGrainObserverExtension : IAsyncEnum
             }
             catch
             {
-                // The task faulted or was canceled; observe its final outcome below.
+                // The task faulted or was canceled, we observe its final
+                // outcome below but break out of the loop!
                 break;
             }
         }
@@ -701,7 +702,7 @@ internal sealed partial class AsyncEnumerableGrainObserverExtension : IAsyncEnum
             }
             finally
             {
-                _shutdownCts.Dispose();
+                try { _shutdownCts.Dispose(); } catch { }
                 completion.TrySetResult(true);
             }
         }
