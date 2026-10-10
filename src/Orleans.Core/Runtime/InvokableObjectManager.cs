@@ -1,16 +1,11 @@
-using System;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
-using System.Threading;
-using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Configuration;
 using Orleans.Internal;
-using Orleans.Runtime;
 using Orleans.Serialization;
 using Orleans.Serialization.Invocation;
 
@@ -64,7 +59,8 @@ namespace Orleans
                 return false;
             }
 
-            objectData?.Dispose();
+            Debug.Assert(objectData is not null);
+            objectData.DisposeAsync().Ignore();
 
             return true;
         }
@@ -113,16 +109,19 @@ namespace Orleans
             }
         }
 
-        public sealed partial class LocalObjectData : IGrainContext, IGrainCallCancellationExtension, IDisposable
+        public sealed partial class LocalObjectData : IGrainContext, IGrainCallCancellationExtension, IAsyncDisposable
         {
             private const int MaxPendingCancellations = 1_024;
+
             private static readonly Func<object?, Task> HandleFunc = self => ((LocalObjectData)self!).LocalObjectMessagePumpAsync();
             private readonly InvokableObjectManager _manager;
             private readonly Dictionary<(GrainId SenderGrainId, CorrelationId MessageId), LinkedListNode<(GrainId, CorrelationId)>> _pendingCancellations = [];
             private readonly LinkedList<(GrainId SenderGrainId, CorrelationId MessageId)> _pendingCancellationOrder = [];
             private readonly Dictionary<Message, Task?> _runningRequests = [];
-            private Task? _messagePumpTask;
+
             private bool _disposed;
+            private Task? _messagePumpTask;
+            private Task? _disposeTask;
 
 #if NET10_0_OR_GREATER
     private readonly Lock _extensionsLock = new();
@@ -450,34 +449,6 @@ namespace Orleans
                 }
             }
 
-            public void Dispose()
-            {
-                lock (Messages)
-                {
-                    _pendingCancellations.Clear();
-                    _pendingCancellationOrder.Clear();
-                }
-
-                AsyncEnumerableGrainObserverExtension? extension;
-
-                lock (_extensionsLock)
-                {
-                    if (_disposed)
-                    {
-                        return;
-                    }
-
-                    _disposed = true;
-
-                    extension = _asyncEnumerableExtension;
-
-                    _asyncEnumerableExtension = null;
-                }
-
-                // Intentionally calling Dispose() as it internally disposes in a FF style. 
-                extension?.Dispose();
-            }
-
             private bool TryTakePendingCancellation(Message message)
             {
                 lock (Messages)
@@ -703,6 +674,64 @@ namespace Orleans
                 _pendingCancellationOrder.Remove(node);
                 return true;
             }
+
+            public ValueTask DisposeAsync()
+            {
+                TaskCompletionSource<bool> completion;
+                AsyncEnumerableGrainObserverExtension? extension;
+
+                lock (_extensionsLock)
+                {
+                    if (_disposeTask is not null)
+                    {
+                        return new ValueTask(_disposeTask);
+                    }
+
+                    _disposed = true;
+
+                    extension = _asyncEnumerableExtension;
+
+                    _asyncEnumerableExtension = null;
+
+                    completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+                    _disposeTask = completion.Task;
+                }
+
+                RunDisposalAsync().Ignore();
+
+                return new ValueTask(completion.Task);
+
+                async Task RunDisposalAsync()
+                {
+                    try
+                    {
+                        lock (Messages)
+                        {
+                            _pendingCancellations.Clear();
+                            _pendingCancellationOrder.Clear();
+                        }
+
+                        if (extension is not null)
+                        {
+                            await extension.DisposeAsync().ConfigureAwait(false);
+                        }
+                    }
+                    catch (Exception exception)
+                    {
+                        LogErrorDisposingAsyncEnumerableExtension(_manager.logger, exception);
+                    }
+                    finally
+                    {
+                        completion.TrySetResult(true);
+                    }
+                }
+            }
+
+            [LoggerMessage(
+                Level = LogLevel.Warning,
+                Message = "Error disposing observer async enumerable extension.")]
+            private static partial void LogErrorDisposingAsyncEnumerableExtension(ILogger logger, Exception exception);
 
             [LoggerMessage(
                 Level = LogLevel.Warning,
