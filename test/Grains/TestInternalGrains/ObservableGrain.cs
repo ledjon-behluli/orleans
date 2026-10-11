@@ -4,6 +4,7 @@ using UnitTests.GrainInterfaces;
 
 namespace UnitTests.Grains
 {
+
     public class ObservableGrain : Grain, IObservableGrain, IIncomingGrainCallFilter
     {
         private readonly List<(string InterfaceName, string MethodName)> _localCalls = new();
