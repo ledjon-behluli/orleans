@@ -287,91 +287,84 @@ internal sealed partial class AsyncEnumerableGrainObserverExtension : IAsyncEnum
 
             if (currentTask is null)
             {
-                var (fillResult, fillValue, pendingTask) = FillBatch(typedEnumerator, state.MaxBatchSize);
+                var currentBatchSize = 0;
+                object? batchResult = null;
 
-                if (pendingTask is not null)
+                do
                 {
-                    state.MoveNextTask = pendingTask;
+                    // Check if the enumerator has a result ready synchronously.
+                    var moveNext = typedEnumerator.MoveNextAsync();
+                    if (moveNext.IsCompletedSuccessfully)
+                    {
+                        var hasValue = moveNext.Result;
+                        if (hasValue)
+                        {
+                            // Account for the just-emitted element.
+                            ++currentBatchSize;
+                            var value = typedEnumerator.Current;
+                            if (currentBatchSize == 1)
+                            {
+                                batchResult = value;
+                            }
+                            else if (currentBatchSize == 2)
+                            {
+                                // Grow from a single element to a list.
+                                batchResult = new List<T> { (T)batchResult!, value };
+                            }
+                            else
+                            {
+                                ((List<T>)batchResult!).Add(value);
+                            }
+                        }
+                        else
+                        {
+                            // Completed successfully, possibly with some final elements.
+                            if (currentBatchSize == 0)
+                            {
+                                return (EnumerationResult.Completed, default);
+                            }
+                            else if (currentBatchSize == 1)
+                            {
+                                return (EnumerationResult.CompletedWithElement, batchResult);
+                            }
+
+                            return (EnumerationResult.CompletedWithBatch, batchResult);
+                        }
+                    }
+                    else
+                    {
+                        // The enumerator did not complete synchronously, so we need to await the result for subsequent elements.
+                        state.MoveNextTask = moveNext.AsTask();
+                        break;
+                    }
+                } while (currentBatchSize < state.MaxBatchSize);
+
+                // If there are elements, return them now instead of waiting for the pending operation to complete.
+                if (currentBatchSize == 1)
+                {
+                    return (EnumerationResult.Element, batchResult!);
+                }
+                else if (currentBatchSize > 1)
+                {
+                    return (EnumerationResult.Batch, batchResult!);
                 }
 
-                if (fillResult is EnumerationResult.Element or EnumerationResult.Batch)
-                {
-                    return (fillResult, fillValue);
-                }
-
-                if (fillResult.IsTerminated())
-                {
-                    return (fillResult, fillValue);
-                }
-
-                Debug.Assert(fillResult is EnumerationResult.Heartbeat);
+                // There are no elements, so wait for the pending operation to complete.
                 currentTask = state.MoveNextTask!;
             }
 
             var longPollTimeout = _messagingOptions.ConfiguredResponseTimeout / 2;
-            var (result, value) = await AwaitPendingMoveNextAsync(typedEnumerator, currentTask, longPollTimeout, cancellationToken).ConfigureAwait(false);
+            var (result, moveNextValue) = await AwaitMoveNextAsync(typedEnumerator, currentTask, longPollTimeout, cancellationToken).ConfigureAwait(false);
 
             if (currentTask.IsCompleted)
             {
                 state.MoveNextTask = null;
             }
 
-            return (result, value);
+            return (result, moveNextValue);
         }
 
-        static (EnumerationResult Result, object? Value, Task<bool>? PendingTask) FillBatch(IAsyncEnumerator<T> enumerator, int maxBatchSize)
-        {
-            var count = 0;
-            object? result = null;
-
-            try
-            {
-                while (count < maxBatchSize)
-                {
-                    var moveNext = enumerator.MoveNextAsync();
-
-                    // Check if the enumerator has a result ready synchronously.
-                    if (!moveNext.IsCompletedSuccessfully)
-                    {
-                        return new(count switch
-                        {
-                            0 => EnumerationResult.Heartbeat,
-                            1 => EnumerationResult.Element,
-                            _ => EnumerationResult.Batch,
-                        }, result, moveNext.AsTask());
-                    }
-
-                    if (!moveNext.Result)
-                    {
-                        return new(count switch
-                        {
-                            0 => EnumerationResult.Completed,
-                            1 => EnumerationResult.CompletedWithElement,
-                            _ => EnumerationResult.CompletedWithBatch,
-                        }, result, null);
-                    }
-
-                    ++count; // Account for the just-emitted element.
-
-                    var value = enumerator.Current;
-
-                    switch (count)
-                    {
-                        case 1: result = value; break;
-                        case 2: result = new List<T> { (T)result!, value }; break;
-                        default: ((List<T>)result!).Add(value); break;
-                    }
-                }
-
-                return new(count == 1 ? EnumerationResult.Element : EnumerationResult.Batch, result, null);
-            }
-            catch (Exception exception)
-            {
-                return (EnumerationResult.Error, exception, null);
-            }
-        }
-
-        static async ValueTask<(EnumerationResult Status, object? Value)> AwaitPendingMoveNextAsync(
+        static async ValueTask<(EnumerationResult Status, object? Value)> AwaitMoveNextAsync(
             IAsyncEnumerator<T> enumerator, Task<bool> moveNextTask, TimeSpan timeout, CancellationToken cancellationToken)
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
