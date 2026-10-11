@@ -18,9 +18,7 @@ public static class AsyncEnumerableGrainCallTestCollection
 }
 
 [CollectionDefinition(AsyncEnumerableGrainCallTestCollection.Name)]
-public sealed class AsyncEnumerableGrainCallTestCollectionDefinition : ICollectionFixture<AsyncEnumerableTestFixture>
-{
-}
+public sealed class AsyncEnumerableGrainCallTestCollectionDefinition : ICollectionFixture<AsyncEnumerableTestFixture>;
 
 /// <summary>
 /// Test fixture which uses a fake silo time provider so cleanup timers can be advanced deterministically.
