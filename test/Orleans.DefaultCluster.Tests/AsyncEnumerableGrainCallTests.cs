@@ -914,7 +914,7 @@ public class AsyncEnumerableObserverCallTests(AsyncEnumerableTestFixture fixture
     [Fact, TestCategory("BVT"), TestCategory("Observable")]
     public async Task Observer_AsyncEnumerable()
     {
-        await WithObserverAsync(async (observerRef, _) =>
+        await RunObserverTestAsync(async (observerRef, _) =>
         {
             var testToken = TestContext.Current.CancellationToken;
 
@@ -951,7 +951,7 @@ public class AsyncEnumerableObserverCallTests(AsyncEnumerableTestFixture fixture
     [Fact, TestCategory("BVT"), TestCategory("Observable")]
     public async Task Observer_AsyncEnumerable_Batch()
     {
-        await WithObserverAsync(async (observerRef, _) =>
+        await RunObserverTestAsync(async (observerRef, _) =>
         {
             var testToken = TestContext.Current.CancellationToken;
 
@@ -981,7 +981,7 @@ public class AsyncEnumerableObserverCallTests(AsyncEnumerableTestFixture fixture
     [Fact, TestCategory("BVT"), TestCategory("Observable")]
     public async Task Observer_AsyncEnumerable_SplitBatch()
     {
-        await WithObserverAsync(async (observerRef, _) =>
+        await RunObserverTestAsync(async (observerRef, _) =>
         {
             var testToken = TestContext.Current.CancellationToken;
 
@@ -1009,7 +1009,7 @@ public class AsyncEnumerableObserverCallTests(AsyncEnumerableTestFixture fixture
     [Fact, TestCategory("BVT"), TestCategory("Observable")]
     public async Task Observer_AsyncEnumerable_NoBatching()
     {
-        await WithObserverAsync(async (observerRef, _) =>
+        await RunObserverTestAsync(async (observerRef, _) =>
         {
             var testToken = TestContext.Current.CancellationToken;
 
@@ -1047,7 +1047,7 @@ public class AsyncEnumerableObserverCallTests(AsyncEnumerableTestFixture fixture
     [InlineData(11, true)]
     public async Task Observer_AsyncEnumerable_Throws(int errorIndex, bool waitAfterYield)
     {
-        await WithObserverAsync(async (observerRef, _) =>
+        await RunObserverTestAsync(async (observerRef, _) =>
         {
             var testToken = TestContext.Current.CancellationToken;
 
@@ -1078,7 +1078,7 @@ public class AsyncEnumerableObserverCallTests(AsyncEnumerableTestFixture fixture
     [Fact, TestCategory("BVT"), TestCategory("Observable")]
     public async Task Observer_AsyncEnumerable_CancellationToken()
     {
-        await WithObserverAsync(async (observerRef, _) =>
+        await RunObserverTestAsync(async (observerRef, _) =>
         {
             var testToken = TestContext.Current.CancellationToken;
 
@@ -1112,7 +1112,7 @@ public class AsyncEnumerableObserverCallTests(AsyncEnumerableTestFixture fixture
     [Fact, TestCategory("BVT"), TestCategory("Observable")]
     public async Task Observer_AsyncEnumerable_CancelBeforeYield()
     {
-        await WithObserverAsync(async (observerRef, _) =>
+        await RunObserverTestAsync(async (observerRef, _) =>
         {
             var testToken = TestContext.Current.CancellationToken;
 
@@ -1154,7 +1154,7 @@ public class AsyncEnumerableObserverCallTests(AsyncEnumerableTestFixture fixture
     [Fact, TestCategory("BVT"), TestCategory("Observable")]
     public async Task Observer_AsyncEnumerable_DisposeWhileMoveNextIsPending()
     {
-        await WithObserverAsync(async (observerRef, implementation) =>
+        await RunObserverTestAsync(async (observerRef, observerImpl) =>
         {
             var testToken = TestContext.Current.CancellationToken;
             var enumerator = observerRef.GetBlockingEnumerable(testToken).GetAsyncEnumerator(testToken);
@@ -1166,11 +1166,11 @@ public class AsyncEnumerableObserverCallTests(AsyncEnumerableTestFixture fixture
                 Assert.Equal("first", enumerator.Current);
 
                 var pendingMoveNext = enumerator.MoveNextAsync().AsTask();
-                await implementation.BlockingMoveNextStarted.WaitAsync(TestTimeout);
+                await observerImpl.BlockingMoveNextStarted.WaitAsync(TestTimeout);
 
                 await enumerator.DisposeAsync().AsTask().WaitAsync(TestTimeout);
                 disposed = true;
-                await implementation.BlockingEnumeratorFinished.WaitAsync(TestTimeout);
+                await observerImpl.BlockingEnumeratorFinished.WaitAsync(TestTimeout);
 
                 var completedTask = await Task.WhenAny(pendingMoveNext, Task.Delay(TestTimeout));
                 Assert.Same(pendingMoveNext, completedTask);
@@ -1202,8 +1202,8 @@ public class AsyncEnumerableObserverCallTests(AsyncEnumerableTestFixture fixture
     public async Task Observer_AsyncEnumerable_OwnerDeregistration_DisposesExtension()
     {
         var testToken = TestContext.Current.CancellationToken;
-        var implementation = new ObservableGrainObserver();
-        var observerRef = GrainFactory.CreateObjectReference<IObservableGrainObserver>(implementation);
+        var observerImpl = new ObservableGrainObserver();
+        var observerRef = GrainFactory.CreateObjectReference<IObservableGrainObserver>(observerImpl);
         var enumerator = observerRef.GetBlockingEnumerable(testToken).GetAsyncEnumerator(testToken);
         var deregistered = false;
 
@@ -1213,13 +1213,13 @@ public class AsyncEnumerableObserverCallTests(AsyncEnumerableTestFixture fixture
 
             var pendingMoveNext = enumerator.MoveNextAsync().AsTask();
 
-            await implementation.BlockingMoveNextStarted.WaitAsync(TestTimeout, testToken);
+            await observerImpl.BlockingMoveNextStarted.WaitAsync(TestTimeout, testToken);
 
             // LocalObjectData owns the extension and should cancel/dispose it when the object reference is removed.
             GrainFactory.DeleteObjectReference<IObservableGrainObserver>(observerRef);
             deregistered = true;
 
-            await implementation.BlockingEnumeratorFinished.WaitAsync(TestTimeout, testToken);
+            await observerImpl.BlockingEnumeratorFinished.WaitAsync(TestTimeout, testToken);
 
             var completedTask = await Task.WhenAny(pendingMoveNext, Task.Delay(TestTimeout, testToken));
             Assert.Same(pendingMoveNext, completedTask);
@@ -1243,7 +1243,7 @@ public class AsyncEnumerableObserverCallTests(AsyncEnumerableTestFixture fixture
         }
     }
 
-    private async Task WithObserverAsync(Func<IObservableGrainObserver, ObservableGrainObserver, Task> test)
+    private async Task RunObserverTestAsync(Func<IObservableGrainObserver, ObservableGrainObserver, Task> test)
     {
         var implementation = new ObservableGrainObserver();
         var observerRef = GrainFactory.CreateObjectReference<IObservableGrainObserver>(implementation);
