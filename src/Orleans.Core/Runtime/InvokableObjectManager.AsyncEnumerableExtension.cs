@@ -61,19 +61,19 @@ internal partial class InvokableObjectManager
             }
         }
 
-        private static void OnEnumeratorGrainObserverCleanupCompleted(AsyncEnumerableGrainObserverExtension extension)
-        {
-            if (DiagnosticListener.IsEnabled())
-            {
-                DiagnosticListener.Write(nameof(OnEnumeratorGrainObserverCleanupCompleted), extension);
-            }
-        }
-
         private static void OnAsyncEnumerableGrainObserverExtensionDisposed(AsyncEnumerableGrainObserverExtension extension)
         {
             if (DiagnosticListener.IsEnabled())
             {
                 DiagnosticListener.Write(nameof(OnAsyncEnumerableGrainObserverExtensionDisposed), extension);
+            }
+        }
+
+        private static void OnEnumeratorObserverCleanupCompleted(AsyncEnumerableGrainObserverExtension extension)
+        {
+            if (DiagnosticListener.IsEnabled())
+            {
+                DiagnosticListener.Write(nameof(OnEnumeratorObserverCleanupCompleted), extension);
             }
         }
 
@@ -156,14 +156,12 @@ internal partial class InvokableObjectManager
                         {
                             await Task.WhenAll(disposalTasks).ConfigureAwait(false);
                         }
+
+                        OnEnumeratorObserverCleanupCompleted(this); // Yes we report even if there are no disposal to do.
                     }
                     catch (Exception exception)
                     {
                         LogWarningErrorCleaningUpEnumerators(exception);
-                    }
-                    finally
-                    {
-                        OnEnumeratorGrainObserverCleanupCompleted(this);
                     }
                 }
             }

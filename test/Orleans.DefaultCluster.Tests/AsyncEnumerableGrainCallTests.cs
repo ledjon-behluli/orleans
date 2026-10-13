@@ -135,6 +135,8 @@ public sealed class AsyncEnumerableExtensionListener : IObserver<KeyValuePair<st
             return;
         }
 
+        // Grain tests inspect IGrainTimer re-arming, but the observer version cleanup uses a PeriodicTimer,
+        // so its tests advance the TimeProvider and wait for cleanup events instead.
         if (value.Value is AsyncEnumerableGrainExtension extension)
         {
             lock (_lock)
@@ -145,22 +147,27 @@ public sealed class AsyncEnumerableExtensionListener : IObserver<KeyValuePair<st
 
         switch (value.Key)
         {
-            case "OnAsyncEnumeratorGrainExtensionCreated":
-            case "OnAsyncEnumerableGrainObserverExtensionCreated": _extensionCreated.TrySetResult(); break;
-            case "OnAsyncEnumerableGrainObserverExtensionDisposed": _extensionDisposed.TrySetResult(); break;
-            case "OnEnumeratorCleanupCompleted":
+            case "OnAsyncEnumeratorGrainExtensionCreated" or "OnAsyncEnumeratorGrainObserverExtensionCreated":
+                _extensionCreated.TrySetResult();
+                break;
+            case "OnEnumeratorCleanupCompleted" or "OnEnumeratorObserverCleanupCompleted":
                 {
                     TaskCompletionSource? cleanupCompleted;
 
                     lock (_lock)
                     {
                         ++_cleanupCount;
+
                         cleanupCompleted = _cleanupCompleted;
+
                         _cleanupCompleted = null;
                     }
 
                     cleanupCompleted?.TrySetResult();
                 }
+                break;
+            case "OnAsyncEnumerableGrainObserverExtensionDisposed":
+                _extensionDisposed.TrySetResult();
                 break;
         }
     }
