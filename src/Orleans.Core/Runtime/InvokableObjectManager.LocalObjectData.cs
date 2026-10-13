@@ -89,6 +89,7 @@ internal partial class InvokableObjectManager
                     }
 
                     _asyncEnumerableExtension = new AsyncEnumerableGrainObserverExtension(this,
+                        _manager.runtimeClient.ServiceProvider.GetRequiredService<TimeProvider>(),
                         _manager.runtimeClient.ServiceProvider.GetRequiredService<IOptions<MessagingOptions>>(),
                         _manager.runtimeClient.ServiceProvider.GetRequiredService<ILogger<AsyncEnumerableGrainObserverExtension>>());
 

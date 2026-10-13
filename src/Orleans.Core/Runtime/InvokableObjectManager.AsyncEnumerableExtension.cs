@@ -12,12 +12,15 @@ internal partial class InvokableObjectManager
     /// </summary>
     public sealed partial class AsyncEnumerableGrainObserverExtension : IAsyncEnumerableGrainExtension, IAsyncDisposable
     {
+        private static readonly DiagnosticListener DiagnosticListener = new("Orleans.Runtime.AsyncEnumerableGrainObserverExtension");
+
 #if NET10_0_OR_GREATER
     private readonly Lock _lock = new();
 #else
         private readonly object _lock = new();
 #endif
 
+        private readonly TimeProvider _timeProvider;
         private readonly IGrainContext _grainContext;
         private readonly MessagingOptions _messagingOptions;
         private readonly Dictionary<Guid, EnumeratorState> _enumerators = [];
@@ -30,20 +33,53 @@ internal partial class InvokableObjectManager
         private bool _disposed;
         private Task? _disposeTask;
 
+        /// <summary>
+        /// Made public for tests!
+        /// </summary>
+        public IGrainContext GrainContext => _grainContext;
+
         public AsyncEnumerableGrainObserverExtension(
             IGrainContext grainContext,
+            TimeProvider timeProvider,
             IOptions<MessagingOptions> messagingOptions,
             ILogger<AsyncEnumerableGrainObserverExtension> logger)
         {
             _logger = logger;
+            _timeProvider = timeProvider;
             _grainContext = grainContext;
             _messagingOptions = messagingOptions.Value;
             _cleanupTask = RunCleanupLoopAsync(_shutdownCts.Token);
+
+            OnAsyncEnumeratorGrainObserverExtensionCreated(this);
+        }
+
+        private static void OnAsyncEnumeratorGrainObserverExtensionCreated(AsyncEnumerableGrainObserverExtension extension)
+        {
+            if (DiagnosticListener.IsEnabled())
+            {
+                DiagnosticListener.Write(nameof(OnAsyncEnumeratorGrainObserverExtensionCreated), extension);
+            }
+        }
+
+        private static void OnEnumeratorGrainObserverCleanupCompleted(AsyncEnumerableGrainObserverExtension extension)
+        {
+            if (DiagnosticListener.IsEnabled())
+            {
+                DiagnosticListener.Write(nameof(OnEnumeratorGrainObserverCleanupCompleted), extension);
+            }
+        }
+
+        private static void OnAsyncEnumerableGrainObserverExtensionDisposed(AsyncEnumerableGrainObserverExtension extension)
+        {
+            if (DiagnosticListener.IsEnabled())
+            {
+                DiagnosticListener.Write(nameof(OnAsyncEnumerableGrainObserverExtensionDisposed), extension);
+            }
         }
 
         private async Task RunCleanupLoopAsync(CancellationToken cancellationToken)
         {
-            using var timer = new PeriodicTimer(_messagingOptions.ResponseTimeout);
+            using var timer = new PeriodicTimer(_messagingOptions.ResponseTimeout, _timeProvider);
 
             try
             {
@@ -124,6 +160,10 @@ internal partial class InvokableObjectManager
                     catch (Exception exception)
                     {
                         LogWarningErrorCleaningUpEnumerators(exception);
+                    }
+                    finally
+                    {
+                        OnEnumeratorGrainObserverCleanupCompleted(this);
                     }
                 }
             }
@@ -697,8 +737,15 @@ internal partial class InvokableObjectManager
                 }
                 finally
                 {
-                    try { _shutdownCts.Dispose(); } catch { }
-                    completion.TrySetResult(true);
+                    try
+                    {
+                        _shutdownCts.Dispose();
+                        OnAsyncEnumerableGrainObserverExtensionDisposed(this);
+                    }
+                    finally
+                    {
+                        completion.TrySetResult(true);
+                    }
                 }
             }
         }
