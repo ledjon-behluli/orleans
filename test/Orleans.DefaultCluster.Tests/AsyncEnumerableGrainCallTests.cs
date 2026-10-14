@@ -1,6 +1,7 @@
 #nullable enable
 using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Configuration;
@@ -40,6 +41,8 @@ public sealed class AsyncEnumerableTestFixture : BaseInProcessTestClusterFixture
 
             siloBuilder.UseFakeTimeProviderForGrainTimers(_timeProvider);
         });
+
+        builder.ConfigureClient(clientBuilder => clientBuilder.Services.Replace(ServiceDescriptor.Singleton<TimeProvider>(_timeProvider)));
     }
 
     public Task AdvanceTimeByResponseTimeoutAsync() =>
@@ -49,7 +52,6 @@ public sealed class AsyncEnumerableTestFixture : BaseInProcessTestClusterFixture
 
     public Task WaitForTimerChangeAsync(object timer, int changeCount, CancellationToken cancellationToken) =>
         _timeProvider.WaitForTimerChangeAsync(timer, changeCount, cancellationToken);
-
 }
 
 /// <summary>
@@ -258,8 +260,8 @@ public class AsyncEnumerableGrainCallTests(AsyncEnumerableTestFixture fixture)
         var grain = GrainFactory.GetGrain<IObservableGrain>(Guid.NewGuid());
 
         // Set up cancellation tokens - one for test timeout, one for the grain call
-        using var testCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        testCts.CancelAfter(TimeSpan.FromSeconds(35));
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(35));
         using var callCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var callId = Guid.NewGuid();
 
@@ -300,7 +302,7 @@ public class AsyncEnumerableGrainCallTests(AsyncEnumerableTestFixture fixture)
             }
 
             await Task.Delay(TimeSpan.FromMilliseconds(10), cancellationToken);
-            if (testCts.IsCancellationRequested)
+            if (timeoutCts.IsCancellationRequested)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 Assert.Fail("Test timed out waiting for cancellation to be recorded.");
@@ -946,31 +948,30 @@ public class AsyncEnumerableObserverCallTests(AsyncEnumerableTestFixture fixture
     {
         await RunObserverTestAsync(async (observerRef, _) =>
         {
-            var testToken = TestContext.Current.CancellationToken;
+            var cancellationToken = TestContext.Current.CancellationToken;
 
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(testToken);
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
-            timeout.CancelAfter(TestTimeout);
+            timeoutCts.CancelAfter(TestTimeout);
 
             var producer = Task.Run(async () =>
             {
                 foreach (var value in Enumerable.Range(0, 5))
                 {
-                    await Task.Delay(20, timeout.Token);
+                    await Task.Delay(20, timeoutCts.Token);
                     await observerRef.OnNext(value.ToString());
                 }
 
                 await observerRef.Complete();
-            }, timeout.Token);
+            }, timeoutCts.Token);
 
             var values = new List<string>();
-            await foreach (var value in observerRef.GetValues(timeout.Token).WithCancellation(timeout.Token))
+            await foreach (var value in observerRef.GetValues(timeoutCts.Token).WithCancellation(timeoutCts.Token))
             {
                 values.Add(value);
-                Logger.LogInformation("Observer_AsyncEnumerable: {Value}", value);
             }
 
-            await producer.WaitAsync(timeout.Token);
+            await producer.WaitAsync(timeoutCts.Token);
             Assert.Equal(new[] { "0", "1", "2", "3", "4" }, values);
 
             var calls = await observerRef.GetIncomingCalls();
@@ -983,7 +984,7 @@ public class AsyncEnumerableObserverCallTests(AsyncEnumerableTestFixture fixture
     {
         await RunObserverTestAsync(async (observerRef, _) =>
         {
-            var testToken = TestContext.Current.CancellationToken;
+            var cancellationToken = TestContext.Current.CancellationToken;
 
             foreach (var value in Enumerable.Range(0, 50))
             {
@@ -993,7 +994,7 @@ public class AsyncEnumerableObserverCallTests(AsyncEnumerableTestFixture fixture
             await observerRef.Complete();
 
             var values = new List<string>();
-            await foreach (var value in observerRef.GetValues(testToken).WithCancellation(testToken))
+            await foreach (var value in observerRef.GetValues(cancellationToken).WithCancellation(cancellationToken))
             {
                 values.Add(value);
             }
@@ -1013,7 +1014,7 @@ public class AsyncEnumerableObserverCallTests(AsyncEnumerableTestFixture fixture
     {
         await RunObserverTestAsync(async (observerRef, _) =>
         {
-            var testToken = TestContext.Current.CancellationToken;
+            var cancellationToken = TestContext.Current.CancellationToken;
 
             foreach (var value in Enumerable.Range(0, 50))
             {
@@ -1023,7 +1024,7 @@ public class AsyncEnumerableObserverCallTests(AsyncEnumerableTestFixture fixture
             await observerRef.Complete();
 
             var values = new List<string>();
-            await foreach (var value in observerRef.GetValues(testToken).WithBatchSize(25).WithCancellation(testToken))
+            await foreach (var value in observerRef.GetValues(cancellationToken).WithBatchSize(25).WithCancellation(cancellationToken))
             {
                 values.Add(value);
             }
@@ -1041,7 +1042,7 @@ public class AsyncEnumerableObserverCallTests(AsyncEnumerableTestFixture fixture
     {
         await RunObserverTestAsync(async (observerRef, _) =>
         {
-            var testToken = TestContext.Current.CancellationToken;
+            var cancellationToken = TestContext.Current.CancellationToken;
 
             foreach (var value in Enumerable.Range(0, 50))
             {
@@ -1051,7 +1052,7 @@ public class AsyncEnumerableObserverCallTests(AsyncEnumerableTestFixture fixture
             await observerRef.Complete();
 
             var values = new List<string>();
-            await foreach (var value in observerRef.GetValues(testToken).WithBatchSize(1).WithCancellation(testToken))
+            await foreach (var value in observerRef.GetValues(cancellationToken).WithBatchSize(1).WithCancellation(cancellationToken))
             {
                 values.Add(value);
             }
@@ -1079,7 +1080,7 @@ public class AsyncEnumerableObserverCallTests(AsyncEnumerableTestFixture fixture
     {
         await RunObserverTestAsync(async (observerRef, _) =>
         {
-            var testToken = TestContext.Current.CancellationToken;
+            var cancellationToken = TestContext.Current.CancellationToken;
 
             const string ErrorMessage = "This is my error!";
 
@@ -1088,9 +1089,9 @@ public class AsyncEnumerableObserverCallTests(AsyncEnumerableTestFixture fixture
             var exception = await Record.ExceptionAsync(async () =>
             {
                 await foreach (var value in observerRef
-                    .GetValuesWithError(errorIndex, waitAfterYield, ErrorMessage, testToken)
+                    .GetValuesWithError(errorIndex, waitAfterYield, ErrorMessage, cancellationToken)
                     .WithBatchSize(10)
-                    .WithCancellation(testToken))
+                    .WithCancellation(cancellationToken))
                 {
                     values.Add(value);
                 }
@@ -1110,28 +1111,28 @@ public class AsyncEnumerableObserverCallTests(AsyncEnumerableTestFixture fixture
     {
         await RunObserverTestAsync(async (observerRef, _) =>
         {
-            var testToken = TestContext.Current.CancellationToken;
+            var cancellationToken = TestContext.Current.CancellationToken;
 
-            using var testCts = CancellationTokenSource.CreateLinkedTokenSource(testToken);
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
             var values = new List<int>();
 
             await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
             {
                 await foreach (var value in observerRef
-                    .GetValuesWithError(int.MaxValue, waitAfterYield: true, "unused", testCts.Token)
+                    .GetValuesWithError(int.MaxValue, waitAfterYield: true, "unused", timeoutCts.Token)
                     .WithBatchSize(10))
                 {
                     values.Add(value);
 
                     if (values.Count == 3)
                     {
-                        testCts.Cancel();
+                        timeoutCts.Cancel();
                     }
                 }
             });
 
-            testToken.ThrowIfCancellationRequested();
+            cancellationToken.ThrowIfCancellationRequested();
             Assert.Equal(3, values.Count);
 
             var calls = await observerRef.GetIncomingCalls();
@@ -1144,21 +1145,21 @@ public class AsyncEnumerableObserverCallTests(AsyncEnumerableTestFixture fixture
     {
         await RunObserverTestAsync(async (observerRef, _) =>
         {
-            var testToken = TestContext.Current.CancellationToken;
+            var cancellationToken = TestContext.Current.CancellationToken;
 
-            using var testCts = CancellationTokenSource.CreateLinkedTokenSource(testToken);
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
-            testCts.CancelAfter(TestTimeout);
+            timeoutCts.CancelAfter(TestTimeout);
 
-            using var callCts = CancellationTokenSource.CreateLinkedTokenSource(testToken);
+            using var callCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
             var callId = Guid.NewGuid();
 
             var cancelTask = Task.Run(async () =>
             {
-                await observerRef.WaitForCall(callId).AsTask().WaitAsync(testCts.Token);
+                await observerRef.WaitForCall(callId).AsTask().WaitAsync(timeoutCts.Token);
                 callCts.Cancel();
-            }, testCts.Token);
+            }, timeoutCts.Token);
 
             await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
             {
@@ -1168,12 +1169,12 @@ public class AsyncEnumerableObserverCallTests(AsyncEnumerableTestFixture fixture
                 }
             });
 
-            await cancelTask.WaitAsync(testCts.Token);
+            await cancelTask.WaitAsync(timeoutCts.Token);
 
             // Wait for the iterator's finally block to record cancellation.
             while (!(await observerRef.GetCanceledCalls()).Contains(callId))
             {
-                await Task.Delay(10, testCts.Token);
+                await Task.Delay(10, timeoutCts.Token);
             }
 
             var calls = await observerRef.GetIncomingCalls();
@@ -1186,8 +1187,8 @@ public class AsyncEnumerableObserverCallTests(AsyncEnumerableTestFixture fixture
     {
         await RunObserverTestAsync(async (observerRef, observerImpl) =>
         {
-            var testToken = TestContext.Current.CancellationToken;
-            var enumerator = observerRef.GetBlockingEnumerable(testToken).GetAsyncEnumerator(testToken);
+            var cancellationToken = TestContext.Current.CancellationToken;
+            var enumerator = observerRef.GetBlockingEnumerable(cancellationToken).GetAsyncEnumerator(cancellationToken);
             var disposed = false;
 
             try
@@ -1231,53 +1232,40 @@ public class AsyncEnumerableObserverCallTests(AsyncEnumerableTestFixture fixture
     [Fact, TestCategory("BVT"), TestCategory("Observable")]
     public async Task Observer_AsyncEnumerable_OwnerDeregistration_DisposesExtension()
     {
-        var testToken = TestContext.Current.CancellationToken;
+        var cancellationToken = TestContext.Current.CancellationToken;
         var observerImpl = new ObservableGrainObserver();
         var observerRef = GrainFactory.CreateObjectReference<IObservableGrainObserver>(observerImpl);
-        var enumerator = observerRef.GetBlockingEnumerable(testToken).GetAsyncEnumerator(testToken);
-        var deregistered = false;
+        var enumerator = observerRef.GetBlockingEnumerable(cancellationToken).GetAsyncEnumerator(cancellationToken);
 
         using var listener = CreateListener(observerImpl);
 
+        Assert.True(await enumerator.MoveNextAsync().AsTask().WaitAsync(TestTimeout, cancellationToken));
+
+        // The first MoveNextAsync causes the observer extension to be created (lazily).
+        await listener.WaitForExtensionCreatedAsync(cancellationToken);
+
+        var pendingMoveNext = enumerator.MoveNextAsync().AsTask();
+
+        await observerImpl.BlockingMoveNextStarted.WaitAsync(TestTimeout, cancellationToken);
+
+        // LocalObjectData owns the extension and should cancel/dispose it when the object reference is removed.
+        GrainFactory.DeleteObjectReference<IObservableGrainObserver>(observerRef);
+
+        // We verify that extension disposal completes.
+        await listener.WaitForExtensionDisposedAsync(cancellationToken);
+
+        await observerImpl.BlockingEnumeratorFinished.WaitAsync(TestTimeout, cancellationToken);
+
+        var completedTask = await Task.WhenAny(pendingMoveNext, Task.Delay(TestTimeout, cancellationToken));
+        Assert.Same(pendingMoveNext, completedTask);
+
         try
         {
-            Assert.True(await enumerator.MoveNextAsync().AsTask().WaitAsync(TestTimeout, testToken));
-
-            // The first MoveNextAsync causes the observer extension to be created (lazily).
-            await listener.WaitForExtensionCreatedAsync(testToken);
-
-            var pendingMoveNext = enumerator.MoveNextAsync().AsTask();
-
-            await observerImpl.BlockingMoveNextStarted.WaitAsync(TestTimeout, testToken);
-
-            // LocalObjectData owns the extension and should cancel/dispose it when the object reference is removed.
-            GrainFactory.DeleteObjectReference<IObservableGrainObserver>(observerRef);
-            deregistered = true;
-
-            // We verify that extension disposal completes.
-            await listener.WaitForExtensionDisposedAsync(testToken);
-
-            await observerImpl.BlockingEnumeratorFinished.WaitAsync(TestTimeout, testToken);
-
-            var completedTask = await Task.WhenAny(pendingMoveNext, Task.Delay(TestTimeout, testToken));
-            Assert.Same(pendingMoveNext, completedTask);
-
-            try
-            {
-                await pendingMoveNext;
-            }
-            catch (Exception)
-            {
-                // Cancellation or a terminal response is expected after owner deregistration.
-            }
+            await pendingMoveNext;
         }
-        finally
+        catch (Exception)
         {
-            if (!deregistered)
-            {
-                GrainFactory.DeleteObjectReference<IObservableGrainObserver>(observerRef);
-                await enumerator.DisposeAsync().AsTask().WaitAsync(TestTimeout, testToken);
-            }
+            // Cancellation or a terminal response is expected after owner deregistration.
         }
     }
 
@@ -1383,8 +1371,7 @@ public class AsyncEnumerableObserverCallTests(AsyncEnumerableTestFixture fixture
     {
         await RunObserverTestAsync(async (observerRef, observerImpl) =>
         {
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken);
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
 
             cts.CancelAfter(TimeSpan.FromSeconds(30));
 
@@ -1419,11 +1406,9 @@ public class AsyncEnumerableObserverCallTests(AsyncEnumerableTestFixture fixture
 
                 Assert.Fail("Expected an exception to be thrown");
             }
-            catch (EnumerationAbortedException exception)
+            catch (EnumerationAbortedException ex)
             {
-                Assert.Contains(
-                    "the remote target does not have a record of this enumerator",
-                    exception.Message);
+                Assert.Contains("the remote target does not have a record of this enumerator", ex.Message);
             }
 
             Assert.Equal(3, values.Count);

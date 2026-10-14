@@ -87,7 +87,7 @@ public sealed class ObservableGrainObserver : IObservableGrainObserver, IIncomin
         {
             GetReceivedCallTcs(id).TrySetResult();
 
-            await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+            await Task.Delay(delay, cancellationToken);
 
             yield return 1;
         }
@@ -108,7 +108,7 @@ public sealed class ObservableGrainObserver : IObservableGrainObserver, IIncomin
 
             _blockingMoveNextStarted.TrySetResult();
 
-            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
 
             // Should never be reached! This enumerator is disposed while its 2nd MoveNext is pending.
             yield return "unexpected";
