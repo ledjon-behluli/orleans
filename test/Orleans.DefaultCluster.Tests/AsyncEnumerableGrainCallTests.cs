@@ -150,7 +150,7 @@ public sealed class AsyncEnumerableExtensionListener : IObserver<KeyValuePair<st
             case "OnAsyncEnumeratorGrainExtensionCreated" or "OnAsyncEnumeratorGrainObserverExtensionCreated":
                 _extensionCreated.TrySetResult();
                 break;
-            case "OnEnumeratorCleanupCompleted" or "OnEnumeratorObserverCleanupCompleted":
+            case "OnEnumeratorCleanupCompleted" or "OnObserverEnumeratorCleanupCompleted":
                 {
                     TaskCompletionSource? cleanupCompleted;
 
