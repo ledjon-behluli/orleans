@@ -16,7 +16,7 @@ public interface IObservableGrainObserver : IGrainObserver
     IAsyncEnumerable<int> SleepyEnumerable(Guid id, TimeSpan delay, CancellationToken cancellationToken = default);
     IAsyncEnumerable<string> GetBlockingEnumerable(CancellationToken cancellationToken = default);
 
-    [AlwaysInterleave] ValueTask<HashSet<Guid>> GetCanceledCalls();
     [AlwaysInterleave] ValueTask WaitForCall(Guid id);
+    [AlwaysInterleave] ValueTask<HashSet<Guid>> GetCanceledCalls();
     [AlwaysInterleave] ValueTask<List<(string InterfaceName, string MethodName)>> GetIncomingCalls();
 }

@@ -1458,8 +1458,8 @@ public class AsyncEnumerableObserverCallTests(AsyncEnumerableTestFixture fixture
     private static AsyncEnumerableExtensionListener CreateListener(ObservableGrainObserver observerImpl) =>
        new AsyncEnumerableExtensionListener(
            diagnosticListenerName: "Orleans.Runtime.AsyncEnumerableGrainObserverExtension",
-            isTargetExtension: value => value is InvokableObjectManager.AsyncEnumerableGrainObserverExtension
-                { GrainContext.GrainInstance: var instance } && ReferenceEquals(instance, observerImpl));
+           isTargetExtension: value => value is InvokableObjectManager.AsyncEnumerableGrainObserverExtension
+               { GrainContext.GrainInstance: var instance } && ReferenceEquals(instance, observerImpl));
 
     private async Task AdvanceToNextObserverCleanupAsync(AsyncEnumerableExtensionListener listener, CancellationToken cancellationToken)
     {

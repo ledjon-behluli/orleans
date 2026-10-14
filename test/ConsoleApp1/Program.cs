@@ -33,7 +33,7 @@ public interface IQueueObserver : IGrainObserver
 }
 
 
-public class QueueObserver : IQueueObserver
+public class QueueObserver : IQueueObserver, IIncomingGrainCallFilter
 {
     private readonly Channel<QueueJob> _jobs = Channel.CreateUnbounded<QueueJob>();
 
@@ -56,6 +56,11 @@ public class QueueObserver : IQueueObserver
         }
 
         Console.WriteLine("GetAsyncEnumerator finished");
+    }
+
+    public Task Invoke(IIncomingGrainCallContext context)
+    {
+        return Task.CompletedTask;
     }
 }
 

@@ -31,7 +31,7 @@ public sealed class ObservableGrainObserver : IObservableGrainObserver, IIncomin
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         // A completed await lets MoveNextAsync complete synchronously when waitAfterYield is false.
-        await Task.CompletedTask.ConfigureAwait(false);
+        await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
 
         for (var i = 0; i < int.MaxValue; i++)
         {
@@ -51,11 +51,11 @@ public sealed class ObservableGrainObserver : IObservableGrainObserver, IIncomin
 
             if (waitAfterYield)
             {
-                await Task.Yield();
+                await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ForceYielding | ConfigureAwaitOptions.ContinueOnCapturedContext);
             }
             else
             {
-                await Task.CompletedTask.ConfigureAwait(false);
+                await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
             }
         }
     }
