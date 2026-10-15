@@ -675,11 +675,11 @@ internal partial class InvokableObjectManager
 
                 foreach (var state in _enumerators.Values)
                 {
-                    GetOrCreateDisposalTask(state, cancel: true, out var work);
+                    GetOrCreateDisposalTask(state, cancel: true, out var disposalWork);
 
-                    if (work is { } item)
+                    if (disposalWork is { } work)
                     {
-                        workItems.Add(item);
+                        workItems.Add(work);
                     }
                 }
 
