@@ -30,6 +30,9 @@ internal partial class InvokableObjectManager
         private readonly Task _cleanupTask;
         private readonly CancellationTokenSource _shutdownCts = new();
 
+        // These two apply to the disposal of the extension itself, not the dispoal of the indivdual enumerators.
+        // Although disposal of the extension implies disposal of the enumerators.
+        // These are important as disposal of the extension can race with the disposal of the enumerators.
         private bool _disposed;
         private Task? _disposeTask;
 
