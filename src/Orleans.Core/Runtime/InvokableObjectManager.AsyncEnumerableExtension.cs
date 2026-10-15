@@ -564,9 +564,9 @@ internal partial class InvokableObjectManager
                         state.Disposed = true;
 
                         // DisposeAsync must not overlap a running MoveNextAsync, so we wait until a running MoveNextAsync completes fully.
-                        if (state.MoveNextTask is { } pendingMoveNext)
+                        if (state.MoveNextTask is { } pendingMoveNextTask)
                         {
-                            await WaitUntilCompletedAsync(pendingMoveNext).ConfigureAwait(false);
+                            await WaitUntilCompletedAsync(pendingMoveNextTask).ConfigureAwait(false);
                         }
 
                         // Then we finalize cancellation

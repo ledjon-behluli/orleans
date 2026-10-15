@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 using UnitTests.GrainInterfaces;
@@ -66,7 +67,7 @@ public sealed class ObservableGrainObserver : IObservableGrainObserver, IIncomin
         return default;
     }
 
-    public ValueTask Fail()
+    public ValueTask Fail() // TODO: Add test for this!
     {
         _updates.Writer.TryComplete(new Exception("I've failed you!"));
         return default;
@@ -110,8 +111,7 @@ public sealed class ObservableGrainObserver : IObservableGrainObserver, IIncomin
 
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
 
-            // Should never be reached! This enumerator is disposed while its 2nd MoveNext is pending.
-            yield return "unexpected";
+            throw new UnreachableException("This enumerator is disposed while its 2nd MoveNext is pending.");
         }
         finally
         {

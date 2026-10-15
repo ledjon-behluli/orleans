@@ -939,7 +939,6 @@ public class AsyncEnumerableGrainCallTests(AsyncEnumerableTestFixture fixture)
 public class AsyncEnumerableObserverCallTests(AsyncEnumerableTestFixture fixture)
 {   
     private IGrainFactory GrainFactory => fixture.GrainFactory;
-    private ILogger Logger => fixture.Logger;
 
     private static readonly TimeSpan TestTimeout = TimeSpan.FromSeconds(10);
 
@@ -1183,54 +1182,42 @@ public class AsyncEnumerableObserverCallTests(AsyncEnumerableTestFixture fixture
     }
 
     [Fact, TestCategory("BVT"), TestCategory("Observable")]
-    public async Task Observer_AsyncEnumerable_DisposeWhileMoveNextIsPending()
+    public async Task Observer_AsyncEnumerable_EnumeratorDisposed_WhileMoveNextIsPending()
     {
         await RunObserverTestAsync(async (observerRef, observerImpl) =>
         {
             var cancellationToken = TestContext.Current.CancellationToken;
             var enumerator = observerRef.GetBlockingEnumerable(cancellationToken).GetAsyncEnumerator(cancellationToken);
-            var disposed = false;
+            
+            Assert.True(await enumerator.MoveNextAsync().AsTask().WaitAsync(TestTimeout));
+            Assert.Equal("first", enumerator.Current);
 
+            var pendingMoveNext = enumerator.MoveNextAsync().AsTask();
+
+            await observerImpl.BlockingMoveNextStarted.WaitAsync(TestTimeout);
+            await enumerator.DisposeAsync().AsTask().WaitAsync(TestTimeout);
+            await observerImpl.BlockingEnumeratorFinished.WaitAsync(TestTimeout);
+
+            var completedTask = await Task.WhenAny(pendingMoveNext, Task.Delay(TestTimeout));
+            Assert.Same(pendingMoveNext, completedTask);
+
+            // Disposal may surface as cancellation or a terminal enumeration error, depending on timing.
             try
             {
-                Assert.True(await enumerator.MoveNextAsync().AsTask().WaitAsync(TestTimeout));
-                Assert.Equal("first", enumerator.Current);
-
-                var pendingMoveNext = enumerator.MoveNextAsync().AsTask();
-                await observerImpl.BlockingMoveNextStarted.WaitAsync(TestTimeout);
-
-                await enumerator.DisposeAsync().AsTask().WaitAsync(TestTimeout);
-                disposed = true;
-                await observerImpl.BlockingEnumeratorFinished.WaitAsync(TestTimeout);
-
-                var completedTask = await Task.WhenAny(pendingMoveNext, Task.Delay(TestTimeout));
-                Assert.Same(pendingMoveNext, completedTask);
-
-                // Disposal may surface as cancellation or a terminal enumeration error, depending on timing.
-                try
-                {
-                    await pendingMoveNext;
-                }
-                catch (Exception)
-                {
-                    // Completion is what matters here: the pending move must not remain stuck behind disposal.
-                }
-
-                var calls = await observerRef.GetIncomingCalls();
-                Assert.Contains(calls, IsDisposeCall);
+                await pendingMoveNext;
             }
-            finally
+            catch (Exception)
             {
-                if (!disposed)
-                {
-                    await enumerator.DisposeAsync().AsTask().WaitAsync(TestTimeout);
-                }
+                // Completion is what matters here: the pending move must not remain stuck behind disposal.
             }
+
+            var calls = await observerRef.GetIncomingCalls();
+            Assert.Contains(calls, IsDisposeCall);
         });
     }
 
     [Fact, TestCategory("BVT"), TestCategory("Observable")]
-    public async Task Observer_AsyncEnumerable_OwnerDeregistration_DisposesExtension()
+    public async Task Observer_AsyncEnumerable_ObserverDeregistration_DisposesWholeExtension()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var observerImpl = new ObservableGrainObserver();

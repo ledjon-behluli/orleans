@@ -21,7 +21,6 @@ internal partial class InvokableObjectManager
 
         private bool _disposed;
         private Task? _messagePumpTask;
-        private Task? _disposeTask;
 
 #if NET10_0_OR_GREATER
     private readonly Lock _extensionsLock = new();
@@ -576,16 +575,15 @@ internal partial class InvokableObjectManager
             return true;
         }
 
-        public ValueTask DisposeAsync()
+        public async ValueTask DisposeAsync()
         {
-            TaskCompletionSource<bool> completion;
             AsyncEnumerableGrainObserverExtension? extension;
 
             lock (_extensionsLock)
             {
-                if (_disposeTask is not null)
+                if (_disposed)
                 {
-                    return new ValueTask(_disposeTask);
+                    return;
                 }
 
                 _disposed = true;
@@ -593,39 +591,24 @@ internal partial class InvokableObjectManager
                 extension = _asyncEnumerableExtension;
 
                 _asyncEnumerableExtension = null;
-
-                completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-
-                _disposeTask = completion.Task;
             }
 
-            RunDisposalAsync().Ignore();
-
-            return new ValueTask(completion.Task);
-
-            async Task RunDisposalAsync()
+            lock (Messages)
             {
-                lock (Messages)
-                {
-                    _pendingCancellations.Clear();
-                    _pendingCancellationOrder.Clear();
-                }
+                _pendingCancellations.Clear();
+                _pendingCancellationOrder.Clear();
+            }
 
-                try
+            try
+            {
+                if (extension is not null)
                 {
-                    if (extension is not null)
-                    {
-                        await extension.DisposeAsync().ConfigureAwait(false);
-                    }
+                    await extension.DisposeAsync().ConfigureAwait(false);
                 }
-                catch (Exception exception)
-                {
-                    LogErrorDisposingAsyncEnumerableExtension(_manager.logger, exception);
-                }
-                finally
-                {
-                    completion.TrySetResult(true);
-                }
+            }
+            catch (Exception exception)
+            {
+                LogErrorDisposingAsyncEnumerableExtension(_manager.logger, exception);
             }
         }
 
